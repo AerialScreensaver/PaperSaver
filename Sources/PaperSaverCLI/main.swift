@@ -72,7 +72,7 @@ struct PaperSaverCLI {
         let commandString = args[0]
         
         if commandString == "--version" || commandString == "-v" {
-            print("papersaver-cli version \(version)")
+            print("papersaver version \(version)")
             exit(0)
         }
         
@@ -108,7 +108,7 @@ struct PaperSaverCLI {
         case .set:
             guard !args.isEmpty else {
                 printError("Error: Screensaver name required")
-                print("Usage: papersaver-cli set <screensaver-name> [--screen <screen-id>]")
+                print("Usage: papersaver set <screensaver-name> [--screen <screen-id>]")
                 exit(1)
             }
             try await setScreensaver(paperSaver, name: args[0], args: Array(args.dropFirst()))
@@ -176,7 +176,7 @@ struct PaperSaverCLI {
             }
             
         case .version:
-            print("papersaver-cli version \(version)")
+            print("papersaver version \(version)")
             
         case .help:
             printUsage()
@@ -207,14 +207,14 @@ struct PaperSaverCLI {
             if !systemScreensavers.isEmpty {
                 print("\nSystem Screensavers:")
                 for saver in systemScreensavers {
-                    print("  • \(saver.name)")
+                    print("  • \(saver.name) (\(saver.type.displayName))")
                 }
             }
             
             if !userScreensavers.isEmpty {
                 print("\nUser Screensavers:")
                 for saver in userScreensavers {
-                    print("  • \(saver.name)")
+                    print("  • \(saver.name) (\(saver.type.displayName))")
                 }
             }
             
@@ -294,7 +294,7 @@ struct PaperSaverCLI {
         case "set":
             guard args.count >= 2, let seconds = Int(args[1]) else {
                 printError("Error: Invalid idle time value")
-                print("Usage: papersaver-cli idle-time set <seconds>")
+                print("Usage: papersaver idle-time set <seconds>")
                 exit(1)
             }
             
@@ -307,7 +307,7 @@ struct PaperSaverCLI {
                 print("✅ Idle time set to: \(formatIdleTime(seconds))")
             } else {
                 printError("Error: Invalid subcommand '\(subcommand)'")
-                print("Usage: papersaver-cli idle-time [get|set <seconds>]")
+                print("Usage: papersaver idle-time [get|set <seconds>]")
                 exit(1)
             }
         }
@@ -336,7 +336,7 @@ struct PaperSaverCLI {
         case "set":
             guard args.count >= 2 else {
                 printError("Error: Wallpaper path required")
-                print("Usage: papersaver-cli wallpaper set <path> [--screen <screen-id>] [--scaling <option>]")
+                print("Usage: papersaver wallpaper set <path> [--screen <screen-id>] [--scaling <option>]")
                 exit(1)
             }
             
@@ -419,42 +419,263 @@ struct PaperSaverCLI {
             }
             
         case .text:
-            printSpaceTree(paperSaver, spaceTree)
+            let debug = args.contains("--debug")
+            if debug {
+                print("=== DEBUG INFO ===")
+                print("Timestamp: \(Date())")
+                print("Raw space tree keys: \(spaceTree.keys.sorted())")
+                if let monitors = spaceTree["monitors"] as? [[String: Any]] {
+                    print("Monitor count: \(monitors.count)")
+                    for (i, monitor) in monitors.enumerated() {
+                        print("Monitor \(i) keys: \(monitor.keys.sorted())")
+                    }
+                }
+                print("==================\n")
+            }
+            printSpaceTree(paperSaver, spaceTree, debug: debug)
         }
     }
     
     @available(macOS 14.0, *)
-    static func getScreensaverForSpace(_ paperSaver: PaperSaver, spaceUUID: String) -> String? {
+    static func getScreensaverForSpace(_ paperSaver: PaperSaver, spaceUUID: String, debug: Bool = false) -> String? {
         let plistManager = PlistManager.shared
         let indexPath = SystemPaths.wallpaperIndexPath
         
+        // Handle empty UUID case - fallback to default space configuration
+        let lookupUUID = spaceUUID.isEmpty ? "" : spaceUUID
+        
+        if debug {
+            print("DEBUG: Looking up screensaver for space UUID: '\(spaceUUID)'")
+            print("DEBUG: Using lookup UUID: '\(lookupUUID)'")
+        }
+        
         guard let plist = try? plistManager.read(at: indexPath),
-              let spaces = plist["Spaces"] as? [String: Any],
-              let spaceConfig = spaces[spaceUUID] as? [String: Any],
-              let displays = spaceConfig["Displays"] as? [String: Any] else {
+              let spaces = plist["Spaces"] as? [String: Any] else {
+            if debug { print("DEBUG: Failed to read plist or no Spaces found") }
             return nil
         }
         
-        // Look for screensaver in each display configuration
-        for (_, displayValue) in displays {
-            if let displayConfig = displayValue as? [String: Any],
-               let idle = displayConfig["Idle"] as? [String: Any],
-               let content = idle["Content"] as? [String: Any],
-               let choices = content["Choices"] as? [[String: Any]],
-               let firstChoice = choices.first,
-               let configurationData = firstChoice["Configuration"] as? Data {
-                
-                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
-                    return moduleName
+        if debug {
+            print("DEBUG: Found \(spaces.keys.count) space configurations in plist")
+            print("DEBUG: Space keys available: \(spaces.keys.sorted())")
+        }
+        
+        // Try the specific space UUID first
+        var spaceConfig: [String: Any]?
+        if let config = spaces[lookupUUID] as? [String: Any] {
+            spaceConfig = config
+            if debug { print("DEBUG: Found exact match for UUID '\(lookupUUID)'") }
+        } else if !lookupUUID.isEmpty {
+            // If specific UUID not found and it's not empty, try empty string (default)
+            spaceConfig = spaces[""] as? [String: Any]
+            if debug { 
+                if spaceConfig != nil {
+                    print("DEBUG: UUID '\(lookupUUID)' not found, using default space configuration")
+                } else {
+                    print("DEBUG: UUID '\(lookupUUID)' not found, and no default configuration available")
                 }
             }
         }
         
+        guard let config = spaceConfig,
+              let displays = config["Displays"] as? [String: Any] else {
+            if debug { print("DEBUG: No valid space config or Displays found") }
+            return nil
+        }
+        
+        if debug {
+            print("DEBUG: Found \(displays.keys.count) displays in space configuration")
+        }
+        
+        // Get connected displays to prioritize active display
+        let connectedDisplays = paperSaver.listDisplays().filter { $0.isConnected }
+        let connectedUUIDs = Set(connectedDisplays.map { $0.uuid })
+        
+        if debug {
+            print("DEBUG: Connected display UUIDs: \(connectedUUIDs)")
+            print("DEBUG: Available display keys in space: \(displays.keys.sorted())")
+        }
+        
+        // Find the connected display first, fall back to sorted order
+        var displayKeysToCheck: [String] = []
+        
+        // First, add any connected displays
+        for displayKey in displays.keys {
+            if connectedUUIDs.contains(displayKey) {
+                displayKeysToCheck.append(displayKey)
+                if debug {
+                    print("DEBUG: Found connected display: \(displayKey)")
+                }
+            }
+        }
+        
+        // Then add remaining displays in sorted order (for fallback)
+        let sortedDisplayKeys = displays.keys.sorted()
+        for displayKey in sortedDisplayKeys {
+            if !displayKeysToCheck.contains(displayKey) {
+                displayKeysToCheck.append(displayKey)
+            }
+        }
+        
+        if debug {
+            print("DEBUG: Processing displays in priority order: \(displayKeysToCheck)")
+        }
+        
+        // Look for screensaver in each display configuration (prioritized order)
+        for (index, displayKey) in displayKeysToCheck.enumerated() {
+            if debug {
+                print("DEBUG: Processing display [\(index)]: '\(displayKey)'")
+            }
+            
+            guard let displayValue = displays[displayKey],
+                  let displayConfig = displayValue as? [String: Any] else {
+                if debug { print("DEBUG: Display '\(displayKey)' has no valid configuration") }
+                continue
+            }
+            
+            if debug {
+                print("DEBUG: Display '\(displayKey)' config keys: \(displayConfig.keys.sorted())")
+            }
+            
+            guard let idle = displayConfig["Idle"] as? [String: Any] else {
+                if debug { print("DEBUG: Display '\(displayKey)' has no Idle configuration") }
+                continue
+            }
+            
+            if debug {
+                print("DEBUG: Display '\(displayKey)' Idle keys: \(idle.keys.sorted())")
+            }
+            
+            guard let content = idle["Content"] as? [String: Any] else {
+                if debug { print("DEBUG: Display '\(displayKey)' Idle has no Content") }
+                continue
+            }
+            
+            if debug {
+                print("DEBUG: Display '\(displayKey)' Content keys: \(content.keys.sorted())")
+            }
+            
+            guard let choices = content["Choices"] as? [[String: Any]] else {
+                if debug { print("DEBUG: Display '\(displayKey)' Content has no Choices array") }
+                continue
+            }
+            
+            if debug {
+                print("DEBUG: Display '\(displayKey)' has \(choices.count) choice(s)")
+            }
+            
+            guard let firstChoice = choices.first else {
+                if debug { print("DEBUG: Display '\(displayKey)' has empty Choices array") }
+                continue
+            }
+            
+            if debug {
+                print("DEBUG: Display '\(displayKey)' first choice keys: \(firstChoice.keys.sorted())")
+            }
+            
+            guard let provider = firstChoice["Provider"] as? String else {
+                if debug { print("DEBUG: Display '\(displayKey)' first choice has no Provider") }
+                continue
+            }
+            
+            if debug {
+                print("DEBUG: Display '\(displayKey)' provider: '\(provider)'")
+            }
+            
+            guard let configurationData = firstChoice["Configuration"] as? Data else {
+                if debug { print("DEBUG: Display '\(displayKey)' first choice has no Configuration data") }
+                continue
+            }
+            
+            if debug {
+                print("DEBUG: Display '\(displayKey)' configuration data size: \(configurationData.count) bytes")
+            }
+            
+            // Use the new type-aware decoding method
+            if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                if let screensaverName = name {
+                    if debug {
+                        print("DEBUG: Successfully decoded screensaver name: '\(screensaverName)' type: '\(type.displayName)'")
+                    }
+                    return "\(screensaverName) (\(type.displayName))"
+                } else {
+                    if debug {
+                        print("DEBUG: Decoded configuration but got nil name, type: '\(type.displayName)'")
+                    }
+                }
+            } else {
+                if debug {
+                    print("DEBUG: Failed to decode with new type-aware method, trying old method")
+                }
+            }
+            
+            // Fallback to old method for compatibility
+            if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                if debug {
+                    print("DEBUG: Old method decoded module name: '\(moduleName)'")
+                }
+                return moduleName
+            } else {
+                if debug {
+                    print("DEBUG: Old method also failed to decode configuration")
+                }
+            }
+            
+            // If all else fails, show provider info with proper type mapping
+            let fallbackResult: String
+            let fallbackType: ScreensaverType
+            
+            switch provider {
+            case "com.apple.wallpaper.choice.screen-saver":
+                fallbackResult = "Traditional Screensaver"
+                fallbackType = .traditional
+            case "com.apple.NeptuneOneExtension":
+                fallbackResult = "Neptune Extension"
+                fallbackType = .appExtension
+            case "com.apple.wallpaper.choice.sequoia":
+                fallbackResult = "Sequoia Video"
+                fallbackType = .sequoiaVideo
+            case "com.apple.wallpaper.choice.macintosh":
+                // Built-in Mac screensaver with empty config
+                fallbackResult = "Classic Mac"
+                fallbackType = .builtInMac
+                if debug {
+                    print("DEBUG: Built-in Mac screensaver detected")
+                }
+                return "\(fallbackResult) (\(fallbackType.displayName))"
+            case "default":
+                fallbackResult = "Default"
+                fallbackType = .defaultScreen
+                return "\(fallbackResult) (\(fallbackType.displayName))"
+            default:
+                fallbackResult = "Unknown (\(provider))"
+                fallbackType = .traditional
+            }
+            
+            if debug {
+                print("DEBUG: Using fallback result: '\(fallbackResult)'")
+                print("DEBUG: Continue checking other displays...")
+            }
+            
+            // For Neptune Extensions with empty config data, continue looking for other displays
+            if provider == "com.apple.NeptuneOneExtension" && configurationData.isEmpty {
+                if debug {
+                    print("DEBUG: Neptune extension with empty config, continuing...")
+                }
+                continue
+            }
+            
+            return fallbackResult
+        }
+        
+        if debug {
+            print("DEBUG: No screensaver configuration found in any display")
+        }
         return nil
     }
     
     @available(macOS 14.0, *)
-    static func printSpaceTree(_ paperSaver: PaperSaver, _ spaceTree: [String: Any]) {
+    static func printSpaceTree(_ paperSaver: PaperSaver, _ spaceTree: [String: Any], debug: Bool = false) {
         guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
             print("No space data available")
             return
@@ -494,10 +715,16 @@ struct PaperSaverCLI {
                 print("    UUID: \(spaceUUID)")
                 
                 // Get and display screensaver info
-                if let screensaverName = getScreensaverForSpace(paperSaver, spaceUUID: spaceUUID) {
+                if debug {
+                    print("    === SCREENSAVER DEBUG FOR SPACE \(spaceNumber) ===")
+                }
+                if let screensaverName = getScreensaverForSpace(paperSaver, spaceUUID: spaceUUID, debug: debug) {
                     print("    Screensaver: \(screensaverName)")
                 } else {
                     print("    Screensaver: None")
+                }
+                if debug {
+                    print("    === END SCREENSAVER DEBUG ===")
                 }
                 
                 totalSpaces += 1
@@ -613,8 +840,8 @@ struct PaperSaverCLI {
     static func handleSetSpaceScreensaver(_ paperSaver: PaperSaver, args: [String]) async throws {
         guard !args.isEmpty else {
             printError("Error: Screensaver name required")
-            print("Usage: papersaver-cli set-space-screensaver <screensaver-name> --space-id <id> [--screen <screen-id>]")
-            print("   or: papersaver-cli set-space-screensaver <screensaver-name> --space-uuid <uuid> [--screen <screen-id>]")
+            print("Usage: papersaver set-space-screensaver <screensaver-name> --space-id <id> [--screen <screen-id>]")
+            print("   or: papersaver set-space-screensaver <screensaver-name> --space-uuid <uuid> [--screen <screen-id>]")
             exit(1)
         }
         
@@ -658,8 +885,8 @@ struct PaperSaverCLI {
         }
         
         printError("Error: Either --space-id <id> or --space-uuid <uuid> is required")
-        print("Usage: papersaver-cli set-space-screensaver <screensaver-name> --space-id <id> [--screen <screen-id>]")
-        print("   or: papersaver-cli set-space-screensaver <screensaver-name> --space-uuid <uuid> [--screen <screen-id>]")
+        print("Usage: papersaver set-space-screensaver <screensaver-name> --space-id <id> [--screen <screen-id>]")
+        print("   or: papersaver set-space-screensaver <screensaver-name> --space-uuid <uuid> [--screen <screen-id>]")
         exit(1)
     }
     
@@ -668,7 +895,7 @@ struct PaperSaverCLI {
     static func handleSetDisplay(_ paperSaver: PaperSaver, args: [String]) async throws {
         guard !args.isEmpty else {
             printError("Error: Screensaver name required")
-            print("Usage: papersaver-cli set-display <screensaver-name> --display <number>")
+            print("Usage: papersaver set-display <screensaver-name> --display <number>")
             exit(1)
         }
         
@@ -681,8 +908,8 @@ struct PaperSaverCLI {
               displayIndex + 1 < remainingArgs.count,
               let displayNumber = Int(remainingArgs[displayIndex + 1]) else {
             printError("Error: --display <number> parameter is required")
-            print("Usage: papersaver-cli set-display <screensaver-name> --display <number>")
-            print("\nUse 'papersaver-cli list-spaces' to see display numbers")
+            print("Usage: papersaver set-display <screensaver-name> --display <number>")
+            print("\nUse 'papersaver list-spaces' to see display numbers")
             exit(1)
         }
         
@@ -701,7 +928,7 @@ struct PaperSaverCLI {
             }
         } catch PaperSaverError.displayNotFound(let displayNum) {
             printError("Error: Display \(displayNum) not found")
-            print("\nUse 'papersaver-cli list-spaces' to see available displays")
+            print("\nUse 'papersaver list-spaces' to see available displays")
             exit(1)
         } catch PaperSaverError.screensaverNotFound(let name) {
             printError("Error: Screensaver '\(name)' not found")
@@ -713,7 +940,7 @@ struct PaperSaverCLI {
     static func handleSetSpace(_ paperSaver: PaperSaver, args: [String]) async throws {
         guard !args.isEmpty else {
             printError("Error: Screensaver name required")
-            print("Usage: papersaver-cli set-space <screensaver-name> --display <number> --space <number>")
+            print("Usage: papersaver set-space <screensaver-name> --display <number> --space <number>")
             exit(1)
         }
         
@@ -726,8 +953,8 @@ struct PaperSaverCLI {
               displayIndex + 1 < remainingArgs.count,
               let displayNumber = Int(remainingArgs[displayIndex + 1]) else {
             printError("Error: --display <number> parameter is required")
-            print("Usage: papersaver-cli set-space <screensaver-name> --display <number> --space <number>")
-            print("\nUse 'papersaver-cli list-spaces' to see display and space numbers")
+            print("Usage: papersaver set-space <screensaver-name> --display <number> --space <number>")
+            print("\nUse 'papersaver list-spaces' to see display and space numbers")
             exit(1)
         }
         
@@ -736,8 +963,8 @@ struct PaperSaverCLI {
               spaceIndex + 1 < remainingArgs.count,
               let spaceNumber = Int(remainingArgs[spaceIndex + 1]) else {
             printError("Error: --space <number> parameter is required")
-            print("Usage: papersaver-cli set-space <screensaver-name> --display <number> --space <number>")
-            print("\nUse 'papersaver-cli list-spaces' to see display and space numbers")
+            print("Usage: papersaver set-space <screensaver-name> --display <number> --space <number>")
+            print("\nUse 'papersaver list-spaces' to see display and space numbers")
             exit(1)
         }
         
@@ -755,11 +982,11 @@ struct PaperSaverCLI {
             }
         } catch PaperSaverError.displayNotFound(let displayNum) {
             printError("Error: Display \(displayNum) not found")
-            print("\nUse 'papersaver-cli list-spaces' to see available displays")
+            print("\nUse 'papersaver list-spaces' to see available displays")
             exit(1)
         } catch PaperSaverError.spaceNotFoundOnDisplay(let displayNum, let spaceNum) {
             printError("Error: Space \(spaceNum) not found on Display \(displayNum)")
-            print("\nUse 'papersaver-cli list-spaces' to see available spaces")
+            print("\nUse 'papersaver list-spaces' to see available spaces")
             exit(1)
         } catch PaperSaverError.screensaverNotFound(let name) {
             printError("Error: Screensaver '\(name)' not found")
@@ -837,10 +1064,10 @@ struct PaperSaverCLI {
     
     static func printUsage() {
         print("""
-        papersaver-cli - Command-line interface for PaperSaver
+        papersaver - Command-line interface for PaperSaver
         
         USAGE:
-            papersaver-cli <command> [options]
+            papersaver <command> [options]
         
         COMMANDS:
             list                    List all available screensavers
@@ -874,26 +1101,26 @@ struct PaperSaverCLI {
             --space-uuid <uuid>     Target specific space by UUID (set-space-screensaver)
         
         EXAMPLES:
-            papersaver-cli list
-            papersaver-cli get --json
-            papersaver-cli set Aerial
-            papersaver-cli set Fliqlo --screen 0
-            papersaver-cli idle-time get
-            papersaver-cli idle-time set 300
-            papersaver-cli wallpaper set ~/Pictures/background.jpg
+            papersaver list
+            papersaver get --json
+            papersaver set Aerial
+            papersaver set Fliqlo --screen 0
+            papersaver idle-time get
+            papersaver idle-time set 300
+            papersaver wallpaper set ~/Pictures/background.jpg
             
           Enhanced Screensaver Examples:
-            papersaver-cli set-display Aerial --display 1
-            papersaver-cli set-space Aerial --display 1 --space 4
-            papersaver-cli restore-backup
-            papersaver-cli restore-backup --force --verbose
+            papersaver set-display Aerial --display 1
+            papersaver set-space Aerial --display 1 --space 4
+            papersaver restore-backup
+            papersaver restore-backup --force --verbose
             
           Sonoma+ Space Examples:
-            papersaver-cli list-spaces
-            papersaver-cli list-displays --json
-            papersaver-cli get-space
-            papersaver-cli set-space-screensaver Aerial --space-id 3
-            papersaver-cli set-space-screensaver Aerial --space-uuid 6CE21993-87A6-4708-80D3-F803E0C6B050
+            papersaver list-spaces
+            papersaver list-displays --json
+            papersaver get-space
+            papersaver set-space-screensaver Aerial --space-id 3
+            papersaver set-space-screensaver Aerial --space-uuid 6CE21993-87A6-4708-80D3-F803E0C6B050
         """)
     }
     

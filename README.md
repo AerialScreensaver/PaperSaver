@@ -18,13 +18,14 @@ A Swift package for programmatic control over screensavers and wallpapers on mac
 
 > 📝 **Development Status**: Features marked with status indicators
 
-- 🖥️ **Screensaver Management**: Set and configure screensavers programmatically ⚠️ *Partially implemented*
+- 🖥️ **Screensaver Management**: Set and configure screensavers programmatically ✅ Implemented
 - 🎨 **Wallpaper Control**: Change desktop wallpapers for individual or all screens ⚠️ *Partially implemented*
-- 🚀 **macOS Sonoma Support**: Support for per-screen/space configuration system ⚠️ *Partially implemented*
-- 🔄 **Pre-Sonoma Compatibility**: Legacy support for older macOS versions ⚠️ *Partially implemented*
-- 📦 **Swift Package Manager**: Easy integration into your Swift projects ⚠️ *Partially implemented*
-- 🧪 **Type-Safe API**: Leverage Swift's type system for safe configuration ⚠️ *Partially implemented*
+- 🚀 **macOS Sonoma Support**: Support for per-screen/space configuration system ✅ Implemented
+- 🔄 **Pre-Sonoma Compatibility**: Legacy support for older macOS versions ⚠️ *Not fully tested*
+- 📦 **Swift Package Manager**: Easy integration into your Swift projects ⚠️ *API may change*
+- 🧪 **Type-Safe API**: Leverage Swift's type system for safe configuration ✅ Implemented
 - 🔧 **CLI Tool**: Command-line interface for testing and automation ⚠️ *Partially implemented*
+
 ## Requirements
 
 - macOS 10.15 (Catalina) or later

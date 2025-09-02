@@ -130,6 +130,31 @@ public final class PlistManager: @unchecked Sendable {
     }
     
     public func createScreensaverConfiguration(moduleURL: URL) throws -> Data {
+        // Determine screensaver type from URL extension
+        let `extension` = moduleURL.pathExtension.lowercased()
+        let screensaverType = ScreensaverType.allCases.first { $0.fileExtension == `extension` } ?? .traditional
+        
+        return try createScreensaverConfiguration(moduleURL: moduleURL, type: screensaverType)
+    }
+    
+    public func createScreensaverConfiguration(moduleURL: URL, type: ScreensaverType) throws -> Data {
+        switch type {
+        case .traditional, .quartz:
+            return try createTraditionalScreensaverConfiguration(moduleURL: moduleURL)
+        case .appExtension:
+            return try createNeptuneExtensionConfiguration(moduleURL: moduleURL)
+        case .sequoiaVideo:
+            return try createSequoiaVideoConfiguration(name: moduleURL.deletingPathExtension().lastPathComponent)
+        case .builtInMac:
+            // Built-in Mac screensavers have empty configuration
+            return Data()
+        case .defaultScreen:
+            // Default screensaver has empty configuration
+            return Data()
+        }
+    }
+    
+    private func createTraditionalScreensaverConfiguration(moduleURL: URL) throws -> Data {
         // Remove trailing slash if present (shouldn't be there for .saver files)
         let urlString = moduleURL.absoluteString
         let cleanURLString = urlString.hasSuffix("/") ? String(urlString.dropLast()) : urlString
@@ -143,15 +168,90 @@ public final class PlistManager: @unchecked Sendable {
         return try createBinaryPlist(from: config)
     }
     
+    private func createNeptuneExtensionConfiguration(moduleURL: URL) throws -> Data {
+        // Neptune extensions use different configuration structure
+        // Based on analysis, we'll create a placeholder structure
+        // This will need to be refined based on actual .appex analysis
+        let config: [String: Any] = [
+            "values": [
+                "legacyScreenSaverGenerationCount": 4,  // Observed value from analysis
+                "style": "dynamic"  // Placeholder - may vary
+            ],
+            "picker": [
+                "id": 0
+            ]
+        ]
+        
+        return try createBinaryPlist(from: config)
+    }
+    
+    private func createSequoiaVideoConfiguration(name: String) throws -> Data {
+        // Sequoia video screensavers use values/appearance/picker structure
+        let config: [String: Any] = [
+            "values": [
+                "appearance": "automatic",  // Could be automatic, light, dark
+                "picker": [
+                    "id": 0
+                ]
+            ]
+        ]
+        
+        return try createBinaryPlist(from: config)
+    }
+    
     public func decodeScreensaverConfiguration(from data: Data) throws -> String? {
         let plist = try readBinaryPlist(from: data)
         
+        // Try traditional screensaver format first
         if let module = plist["module"] as? [String: Any],
            let relative = module["relative"] as? String,
            let url = URL(string: relative) {
             return url.deletingPathExtension().lastPathComponent
         }
         
+        // Try Neptune Extension format
+        if let values = plist["values"] as? [String: Any],
+           values["legacyScreenSaverGenerationCount"] != nil {
+            // For Neptune extensions, we need to extract the name differently
+            // This is a placeholder - we'll need to refine based on actual structure
+            return "Neptune Extension"
+        }
+        
+        // Try Sequoia video format
+        if let values = plist["values"] as? [String: Any],
+           let appearance = values["appearance"] as? String {
+            // For Sequoia video screensavers, we might extract name differently
+            return "Sequoia Video (\(appearance))"
+        }
+        
         return nil
+    }
+    
+    public func decodeScreensaverConfigurationWithType(from data: Data) throws -> (name: String?, type: ScreensaverType) {
+        let plist = try readBinaryPlist(from: data)
+        
+        // Try traditional screensaver format first
+        if let module = plist["module"] as? [String: Any],
+           let relative = module["relative"] as? String,
+           let url = URL(string: relative) {
+            let name = url.deletingPathExtension().lastPathComponent
+            let `extension` = url.pathExtension.lowercased()
+            let type = ScreensaverType.allCases.first { $0.fileExtension == `extension` } ?? .traditional
+            return (name, type)
+        }
+        
+        // Try Neptune Extension format
+        if let values = plist["values"] as? [String: Any],
+           values["legacyScreenSaverGenerationCount"] != nil {
+            return ("Neptune Extension", .appExtension)
+        }
+        
+        // Try Sequoia video format
+        if let values = plist["values"] as? [String: Any],
+           let appearance = values["appearance"] as? String {
+            return ("Sequoia Video (\(appearance))", .sequoiaVideo)
+        }
+        
+        return (nil, .traditional)
     }
 }
