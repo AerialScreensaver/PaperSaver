@@ -38,16 +38,36 @@ public class PaperSaver {
         return screensaverManager.listAvailableScreensavers()
     }
     
-    public func setWallpaper(url: URL, screen: NSScreen? = nil, options: WallpaperOptions = .default) async throws {
-        try await wallpaperManager.setWallpaper(url: url, screen: screen, options: options)
+    public func setWallpaper(imageURL: URL, screen: NSScreen? = nil, options: WallpaperOptions = .default) async throws {
+        try await wallpaperManager.setWallpaper(imageURL: imageURL, screen: screen, options: options)
     }
     
-    public func getCurrentWallpaper(for screen: NSScreen) -> URL? {
+    public func getCurrentWallpaper(for screen: NSScreen? = nil) -> WallpaperInfo? {
         return wallpaperManager.getCurrentWallpaper(for: screen)
     }
     
-    public func setWallpaperForAllScreens(url: URL) async throws {
-        try await wallpaperManager.setWallpaperForAllScreens(url: url)
+    public func setWallpaperEverywhere(imageURL: URL, options: WallpaperOptions = .default) async throws {
+        try await wallpaperManager.setWallpaperEverywhere(imageURL: imageURL, options: options)
+    }
+    
+    @available(macOS 14.0, *)
+    public func setWallpaperForSpace(imageURL: URL, spaceUUID: String, screen: NSScreen? = nil, options: WallpaperOptions = .default) async throws {
+        try await wallpaperManager.setWallpaperForSpace(imageURL: imageURL, spaceUUID: spaceUUID, screen: screen, options: options)
+    }
+    
+    @available(macOS 14.0, *)
+    public func setWallpaperForSpaceID(imageURL: URL, spaceID: Int, screen: NSScreen? = nil, options: WallpaperOptions = .default) async throws {
+        try await wallpaperManager.setWallpaperForSpaceID(imageURL: imageURL, spaceID: spaceID, screen: screen, options: options)
+    }
+    
+    @available(macOS 14.0, *)
+    public func setWallpaperForDisplay(imageURL: URL, displayNumber: Int, options: WallpaperOptions = .default) async throws {
+        try await wallpaperManager.setWallpaperForDisplay(imageURL: imageURL, displayNumber: displayNumber, options: options)
+    }
+    
+    @available(macOS 14.0, *)
+    public func setWallpaperForDisplaySpace(imageURL: URL, displayNumber: Int, spaceNumber: Int, options: WallpaperOptions = .default) async throws {
+        try await wallpaperManager.setWallpaperForDisplaySpace(imageURL: imageURL, displayNumber: displayNumber, spaceNumber: spaceNumber, options: options)
     }
     
     public var systemInfo: SystemVersionInfo {

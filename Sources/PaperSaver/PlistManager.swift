@@ -254,4 +254,51 @@ public final class PlistManager: @unchecked Sendable {
         
         return (nil, .traditional)
     }
+    
+    public func createWallpaperConfiguration(imageURL: URL) throws -> Data {
+        let wallpaperConfig: [String: Any] = [
+            "type": "imageFile",
+            "url": [
+                "relative": imageURL.absoluteString
+            ]
+        ]
+        
+        return try createBinaryPlist(from: wallpaperConfig)
+    }
+    
+    public func decodeWallpaperConfiguration(from data: Data) throws -> String? {
+        let plist = try readBinaryPlist(from: data)
+        
+        if let url = plist["url"] as? [String: Any],
+           let relative = url["relative"] as? String {
+            return relative
+        }
+        
+        return nil
+    }
+    
+    public func createWallpaperOptions(style: WallpaperStyle = .fill) throws -> Data {
+        let optionsConfig: [String: Any] = [
+            "values": [
+                "style": [
+                    "picker": [
+                        "_0": [
+                            "id": style.rawValue
+                        ]
+                    ]
+                ]
+            ]
+        ]
+        
+        return try createBinaryPlist(from: optionsConfig)
+    }
+}
+
+public enum WallpaperStyle: String, Sendable {
+    case fill = "fill"
+    case fit = "fit"
+    case stretch = "stretch"
+    case center = "center"
+    case tile = "tile"
+    case dynamic = "dynamic"
 }

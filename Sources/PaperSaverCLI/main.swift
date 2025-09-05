@@ -9,15 +9,12 @@ struct PaperSaverCLI {
     enum Command: String, CaseIterable {
         case list
         case get
-        case set
         case idleTime = "idle-time"
-        case wallpaper
         case listSpaces = "list-spaces"
         case listDisplays = "list-displays"
         case getSpace = "get-space"
-        case setSpaceScreensaver = "set-space-screensaver"
-        case setDisplay = "set-display"
-        case setSpace = "set-space"
+        case setSaver = "set-saver"
+        case setPaper = "set-paper"
         case restoreBackup = "restore-backup"
         case version
         case help
@@ -28,24 +25,18 @@ struct PaperSaverCLI {
                 return "List all available screensavers"
             case .get:
                 return "Get current screensaver"
-            case .set:
-                return "Set screensaver"
             case .idleTime:
                 return "Get or set idle time"
-            case .wallpaper:
-                return "Manage wallpapers"
             case .listSpaces:
                 return "List all spaces (Sonoma+)"
             case .listDisplays:
                 return "List all displays with UUID mapping (Sonoma+)"
             case .getSpace:
                 return "Get current active space (Sonoma+)"
-            case .setSpaceScreensaver:
-                return "Set screensaver for specific space (Sonoma+)"
-            case .setDisplay:
-                return "Set screensaver on all spaces of a display (Sonoma+)"
-            case .setSpace:
-                return "Set screensaver on specific display space (Sonoma+)"
+            case .setSaver:
+                return "Set screensaver with unified targeting options"
+            case .setPaper:
+                return "Set wallpaper with unified targeting options"
             case .restoreBackup:
                 return "Restore wallpaper/screensaver settings from backup"
             case .version:
@@ -105,19 +96,8 @@ struct PaperSaverCLI {
         case .get:
             try getScreensaver(paperSaver, args: args)
             
-        case .set:
-            guard !args.isEmpty else {
-                printError("Error: Screensaver name required")
-                print("Usage: papersaver set <screensaver-name> [--screen <screen-id>]")
-                exit(1)
-            }
-            try await setScreensaver(paperSaver, name: args[0], args: Array(args.dropFirst()))
-            
         case .idleTime:
             try handleIdleTime(paperSaver, args: args)
-            
-        case .wallpaper:
-            try await handleWallpaper(paperSaver, args: args)
             
         case .listSpaces:
             if #available(macOS 14.0, *) {
@@ -143,29 +123,21 @@ struct PaperSaverCLI {
                 exit(1)
             }
             
-        case .setSpaceScreensaver:
-            if #available(macOS 14.0, *) {
-                try await handleSetSpaceScreensaver(paperSaver, args: args)
-            } else {
-                printError("Error: Space commands require macOS 14.0 (Sonoma) or later")
+        case .setSaver:
+            guard !args.isEmpty else {
+                printError("Error: Screensaver name required")
+                print("Usage: papersaver set-saver <screensaver-name> [targeting-options]")
                 exit(1)
             }
+            try await handleUnifiedSetSaver(paperSaver, screensaverName: args[0], args: Array(args.dropFirst()))
             
-        case .setDisplay:
-            if #available(macOS 14.0, *) {
-                try await handleSetDisplay(paperSaver, args: args)
-            } else {
-                printError("Error: Display commands require macOS 14.0 (Sonoma) or later")
+        case .setPaper:
+            guard !args.isEmpty else {
+                printError("Error: Wallpaper path required")
+                print("Usage: papersaver set-paper <image-path> [targeting-options]")
                 exit(1)
             }
-            
-        case .setSpace:
-            if #available(macOS 14.0, *) {
-                try await handleSetSpace(paperSaver, args: args)
-            } else {
-                printError("Error: Space commands require macOS 14.0 (Sonoma) or later")
-                exit(1)
-            }
+            try await handleUnifiedSetPaper(paperSaver, imagePath: args[0], args: Array(args.dropFirst()))
             
         case .restoreBackup:
             if #available(macOS 14.0, *) {
@@ -328,7 +300,7 @@ struct PaperSaverCLI {
         case "get":
             if let screen = NSScreen.main,
                let url = paperSaver.getCurrentWallpaper(for: screen) {
-                print("Current wallpaper: \(url.path)")
+                print("Current wallpaper: \(url.imagePath)")
             } else {
                 print("No wallpaper currently set")
             }
@@ -351,7 +323,7 @@ struct PaperSaverCLI {
             let screen = getScreen(from: args)
             let options = WallpaperOptions()
             
-            try await paperSaver.setWallpaper(url: url, screen: screen, options: options)
+            try await paperSaver.setWallpaper(imageURL: url, screen: screen, options: options)
             print("✅ Successfully set wallpaper")
             
         case "list-options":
@@ -1072,55 +1044,58 @@ struct PaperSaverCLI {
         COMMANDS:
             list                    List all available screensavers
             get                     Get current screensaver
-            set <name>              Set screensaver
             idle-time [get|set]     Get or set idle time before screensaver starts
-            wallpaper <subcommand>  Manage wallpapers
             
-          Enhanced Screensaver Commands:
-            set-display <name>      Set screensaver on all spaces of a display (Sonoma+)
-            set-space <name>        Set screensaver on specific display space (Sonoma+)
-            restore-backup          Restore wallpaper/screensaver settings from backup (Sonoma+)
+          Unified Commands (Sonoma+):
+            set-saver <name>        Set screensaver with unified targeting options
+            set-paper <path>        Set wallpaper with unified targeting options
+            restore-backup          Restore wallpaper/screensaver settings from backup
             
-          Sonoma+ Space Commands:
+          Information Commands (Sonoma+):
             list-spaces             List all spaces with display information
             list-displays           List displays with UUID to screen mapping
             get-space               Get current active space
-            set-space-screensaver   Set screensaver for specific space
             
             help, --help, -h        Show this help message
             version, --version, -v  Show version information
         
-        OPTIONS:
-            --screen, -s <id>       Target specific screen (default: all screens)
+        TARGETING OPTIONS (for set-saver and set-paper):
+            --display <number>      Target specific display by number (1, 2, 3...)
+            --space <number>        Target specific space by number (1, 2, 3...)
+            --space-uuid <uuid>     Target specific space by UUID
+            --display-uuid <uuid>   Target specific display by UUID
+            
+            Note: Without targeting options, commands apply everywhere.
+                  Combine --display and --space to target a specific display's space.
+        
+        OTHER OPTIONS:
+            --screen, -s <id>       Target specific screen (legacy commands only)
             --json, -j              Output in JSON format
             --verbose, -v           Show verbose output
             --force, -f             Skip confirmation prompts (restore-backup only)
-            --display <number>      Target specific display by number (1, 2, 3...)
-            --space <number>        Target specific space by number (1, 2, 3...)
-            --space-id <id>         Target specific space by ID (set-space-screensaver)
-            --space-uuid <uuid>     Target specific space by UUID (set-space-screensaver)
         
         EXAMPLES:
             papersaver list
             papersaver get --json
-            papersaver set Aerial
-            papersaver set Fliqlo --screen 0
             papersaver idle-time get
             papersaver idle-time set 300
-            papersaver wallpaper set ~/Pictures/background.jpg
             
-          Enhanced Screensaver Examples:
-            papersaver set-display Aerial --display 1
-            papersaver set-space Aerial --display 1 --space 4
-            papersaver restore-backup
-            papersaver restore-backup --force --verbose
+          Unified Command Examples:
+            papersaver set-saver Aerial
+            papersaver set-saver Aerial --display 1
+            papersaver set-saver Aerial --display 1 --space 4
+            papersaver set-saver Aerial --space-uuid 6CE21993-87A6-4708-80D3-F803E0C6B050
             
-          Sonoma+ Space Examples:
+            papersaver set-paper ~/Pictures/background.jpg
+            papersaver set-paper ~/Pictures/background.jpg --display 1
+            papersaver set-paper ~/Pictures/background.jpg --space 2
+            papersaver set-paper ~/Pictures/background.jpg --space-uuid 6CE21993-87A6-4708-80D3-F803E0C6B050
+            
+          Information Examples:
             papersaver list-spaces
             papersaver list-displays --json
             papersaver get-space
-            papersaver set-space-screensaver Aerial --space-id 3
-            papersaver set-space-screensaver Aerial --space-uuid 6CE21993-87A6-4708-80D3-F803E0C6B050
+            papersaver restore-backup --force --verbose
         """)
     }
     
@@ -1138,5 +1113,180 @@ extension String {
 extension String {
     var expandingTildeInPath: String {
         return NSString(string: self).expandingTildeInPath
+    }
+}
+
+// MARK: - Unified Command Support
+extension PaperSaverCLI {
+    struct TargetingOptions {
+        let displayNumber: Int?
+        let spaceNumber: Int?
+        let spaceUUID: String?
+        let displayUUID: String?
+        
+        var hasDisplayTarget: Bool {
+            return displayNumber != nil || displayUUID != nil
+        }
+        
+        var hasSpaceTarget: Bool {
+            return spaceNumber != nil || spaceUUID != nil
+        }
+        
+        var isEverywhere: Bool {
+            return !hasDisplayTarget && !hasSpaceTarget
+        }
+    }
+    
+    static func parseTargetingOptions(from args: [String]) -> TargetingOptions {
+        var displayNumber: Int?
+        var spaceNumber: Int?
+        var spaceUUID: String?
+        var displayUUID: String?
+        
+        // Parse --display <number>
+        if let displayIndex = args.firstIndex(of: "--display"),
+           displayIndex + 1 < args.count,
+           let displayNum = Int(args[displayIndex + 1]) {
+            displayNumber = displayNum
+        }
+        
+        // Parse --space <number>
+        if let spaceIndex = args.firstIndex(of: "--space"),
+           spaceIndex + 1 < args.count,
+           let spaceNum = Int(args[spaceIndex + 1]) {
+            spaceNumber = spaceNum
+        }
+        
+        // Parse --space-uuid <uuid>
+        if let spaceUUIDIndex = args.firstIndex(of: "--space-uuid"),
+           spaceUUIDIndex + 1 < args.count {
+            spaceUUID = args[spaceUUIDIndex + 1]
+        }
+        
+        // Parse --display-uuid <uuid>
+        if let displayUUIDIndex = args.firstIndex(of: "--display-uuid"),
+           displayUUIDIndex + 1 < args.count {
+            displayUUID = args[displayUUIDIndex + 1]
+        }
+        
+        return TargetingOptions(
+            displayNumber: displayNumber,
+            spaceNumber: spaceNumber,
+            spaceUUID: spaceUUID,
+            displayUUID: displayUUID
+        )
+    }
+    
+    static func handleUnifiedSetSaver(_ paperSaver: PaperSaver, screensaverName: String, args: [String]) async throws {
+        let options = parseTargetingOptions(from: args)
+        
+        if options.isEverywhere {
+            try await setScreensaver(paperSaver, name: screensaverName, args: [])
+        } else if options.hasDisplayTarget && options.hasSpaceTarget {
+            if #available(macOS 14.0, *) {
+                if let displayNumber = options.displayNumber, let spaceNumber = options.spaceNumber {
+                    let fakeArgs = ["--display", displayNumber.description, "--space", spaceNumber.description]
+                    try await handleSetSpace(paperSaver, args: [screensaverName] + fakeArgs)
+                } else {
+                    throw PaperSaverError.invalidConfiguration("Invalid display/space combination")
+                }
+            } else {
+                printError("Error: Space/Display commands require macOS 14.0 (Sonoma) or later")
+                exit(1)
+            }
+        } else if options.hasDisplayTarget {
+            if #available(macOS 14.0, *) {
+                if let displayNumber = options.displayNumber {
+                    let fakeArgs = ["--display", displayNumber.description]
+                    try await handleSetDisplay(paperSaver, args: [screensaverName] + fakeArgs)
+                } else {
+                    throw PaperSaverError.invalidConfiguration("Invalid display number")
+                }
+            } else {
+                printError("Error: Display commands require macOS 14.0 (Sonoma) or later")
+                exit(1)
+            }
+        } else if options.hasSpaceTarget {
+            if #available(macOS 14.0, *) {
+                if let spaceUUID = options.spaceUUID {
+                    let fakeArgs = ["--space-uuid", spaceUUID]
+                    try await handleSetSpaceScreensaver(paperSaver, args: [screensaverName] + fakeArgs)
+                } else if let spaceNumber = options.spaceNumber {
+                    let fakeArgs = ["--space", spaceNumber.description]
+                    try await handleSetSpaceScreensaver(paperSaver, args: [screensaverName] + fakeArgs)
+                } else {
+                    throw PaperSaverError.invalidConfiguration("Invalid space identifier")
+                }
+            } else {
+                printError("Error: Space commands require macOS 14.0 (Sonoma) or later")
+                exit(1)
+            }
+        } else {
+            try await setScreensaver(paperSaver, name: screensaverName, args: [])
+        }
+    }
+    
+    static func handleUnifiedSetPaper(_ paperSaver: PaperSaver, imagePath: String, args: [String]) async throws {
+        let options = parseTargetingOptions(from: args)
+        let imageURL = URL(fileURLWithPath: imagePath)
+        let wallpaperOptions = WallpaperOptions()
+        
+        if options.isEverywhere {
+            try await paperSaver.setWallpaperEverywhere(imageURL: imageURL, options: wallpaperOptions)
+            print("✅ Successfully set wallpaper everywhere")
+        } else if options.hasDisplayTarget && options.hasSpaceTarget {
+            if #available(macOS 14.0, *) {
+                if let displayNumber = options.displayNumber, let spaceNumber = options.spaceNumber {
+                    try await paperSaver.setWallpaperForDisplaySpace(
+                        imageURL: imageURL,
+                        displayNumber: displayNumber,
+                        spaceNumber: spaceNumber,
+                        options: wallpaperOptions
+                    )
+                    print("✅ Successfully set wallpaper for display \(displayNumber) space \(spaceNumber)")
+                } else {
+                    throw PaperSaverError.invalidConfiguration("Invalid display/space combination")
+                }
+            } else {
+                printError("Error: Display/Space commands require macOS 14.0 (Sonoma) or later")
+                exit(1)
+            }
+        } else if options.hasDisplayTarget {
+            if #available(macOS 14.0, *) {
+                if let displayNumber = options.displayNumber {
+                    try await paperSaver.setWallpaperForDisplay(
+                        imageURL: imageURL,
+                        displayNumber: displayNumber,
+                        options: wallpaperOptions
+                    )
+                    print("✅ Successfully set wallpaper for display \(displayNumber)")
+                } else {
+                    throw PaperSaverError.invalidConfiguration("Invalid display number")
+                }
+            } else {
+                printError("Error: Display commands require macOS 14.0 (Sonoma) or later")
+                exit(1)
+            }
+        } else if options.hasSpaceTarget {
+            if #available(macOS 14.0, *) {
+                if let spaceUUID = options.spaceUUID {
+                    try await paperSaver.setWallpaperForSpace(
+                        imageURL: imageURL,
+                        spaceUUID: spaceUUID,
+                        screen: nil,
+                        options: wallpaperOptions
+                    )
+                    print("✅ Successfully set wallpaper for space \(spaceUUID)")
+                } else {
+                    throw PaperSaverError.invalidConfiguration("Invalid space identifier")
+                }
+            } else {
+                printError("Error: Space commands require macOS 14.0 (Sonoma) or later")
+                exit(1)
+            }
+        } else {
+            try await paperSaver.setWallpaperEverywhere(imageURL: imageURL, options: wallpaperOptions)
+            print("✅ Successfully set wallpaper")
+        }
     }
 }
