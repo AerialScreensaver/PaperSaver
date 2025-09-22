@@ -15,7 +15,7 @@ let package = Package(
             targets: ["PaperSaver"]
         ),
         .executable(
-            name: "papersaver",
+            name: "papersaverCLI",
             targets: ["PaperSaverCLI"]
         ),
         .executable(

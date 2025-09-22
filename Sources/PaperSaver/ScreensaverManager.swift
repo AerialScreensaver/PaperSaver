@@ -125,44 +125,31 @@ public class ScreensaverManager: ScreensaverManaging {
 
     public func getActiveScreensavers() -> [String] {
         if #available(macOS 14.0, *) {
-            // Sonoma+: Get screensaver names from all spaces on connected displays
+            // Sonoma+: Use getNativeSpaceTree approach (same as CLI list-spaces command)
             var screensaverNames = Set<String>()
 
-            // Get all currently connected screens for filtering
-            let screens = NSScreen.screens
-            let connectedDisplayUUIDs = Set(screens.compactMap { getDisplayUUID(for: $0) })
+            // Get the native space tree (this is what the CLI uses successfully)
+            let spaceTree = getNativeSpaceTree()
 
-            // Get all active spaces (non-historical)
-            let activeSpaces = getAllSpaces(includeHistorical: false)
+            guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
+                return []
+            }
 
-            for space in activeSpaces {
-                // Check if this space has displays that are currently connected
-                let spaceConnectedDisplays = space.displayUUIDs.filter { connectedDisplayUUIDs.contains($0) }
-
-                // Skip spaces that don't have any connected displays
-                guard !spaceConnectedDisplays.isEmpty else { continue }
-
-                // Read space configuration from plist
-                let indexPath = SystemPaths.wallpaperIndexPath
-                guard let plist = try? plistManager.read(at: indexPath),
-                      let spacesConfig = plist["Spaces"] as? [String: Any],
-                      let spaceConfig = spacesConfig[space.uuid] as? [String: Any],
-                      let spaceDisplays = spaceConfig["Displays"] as? [String: Any] else {
+            // Iterate through each monitor and its spaces
+            for monitor in monitors {
+                guard let spaces = monitor["spaces"] as? [[String: Any]] else {
                     continue
                 }
 
-                // Extract screensaver names from connected displays in this space
-                for displayUUID in spaceConnectedDisplays {
-                    if let displayConfig = spaceDisplays[displayUUID] as? [String: Any],
-                       let idle = displayConfig["Idle"] as? [String: Any],
-                       let content = idle["Content"] as? [String: Any],
-                       let choices = content["Choices"] as? [[String: Any]],
-                       let firstChoice = choices.first,
-                       let configurationData = firstChoice["Configuration"] as? Data {
+                // Process each space in this monitor
+                for space in spaces {
+                    guard let spaceUUID = space["uuid"] as? String else {
+                        continue
+                    }
 
-                        if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
-                            screensaverNames.insert(moduleName)
-                        }
+                    // Get screensaver for this space using the same logic as CLI
+                    if let screensaverName = getScreensaverForSpaceUUID(spaceUUID) {
+                        screensaverNames.insert(screensaverName)
                     }
                 }
             }
@@ -175,6 +162,72 @@ public class ScreensaverManager: ScreensaverManaging {
             }
             return []
         }
+    }
+
+    @available(macOS 14.0, *)
+    private func getScreensaverForSpaceUUID(_ spaceUUID: String) -> String? {
+        let indexPath = SystemPaths.wallpaperIndexPath
+
+        // Handle empty UUID case - fallback to default space configuration
+        let lookupUUID = spaceUUID.isEmpty ? "" : spaceUUID
+
+        guard let plist = try? plistManager.read(at: indexPath),
+              let spaces = plist["Spaces"] as? [String: Any] else {
+            return nil
+        }
+
+        // Try the specific space UUID first
+        var spaceConfig: [String: Any]?
+        if let config = spaces[lookupUUID] as? [String: Any] {
+            spaceConfig = config
+        } else if !lookupUUID.isEmpty {
+            // If specific UUID not found and it's not empty, try empty string (default)
+            spaceConfig = spaces[""] as? [String: Any]
+        }
+
+        guard let config = spaceConfig,
+              let displays = config["Displays"] as? [String: Any] else {
+            return nil
+        }
+
+        // Get connected displays to prioritize active displays
+        let connectedDisplays = listDisplays().filter { $0.isConnected }
+        let connectedUUIDs = Set(connectedDisplays.map { $0.uuid })
+
+        // Find the connected display first, fall back to any display
+        var displayKeysToCheck: [String] = []
+
+        // First, add any connected displays
+        for displayKey in displays.keys {
+            if connectedUUIDs.contains(displayKey) {
+                displayKeysToCheck.append(displayKey)
+            }
+        }
+
+        // Then add remaining displays in sorted order (for fallback)
+        let sortedDisplayKeys = displays.keys.sorted()
+        for displayKey in sortedDisplayKeys {
+            if !displayKeysToCheck.contains(displayKey) {
+                displayKeysToCheck.append(displayKey)
+            }
+        }
+
+        // Check each display for screensaver configuration
+        for displayKey in displayKeysToCheck {
+            if let displayConfig = displays[displayKey] as? [String: Any],
+               let idle = displayConfig["Idle"] as? [String: Any],
+               let content = idle["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data {
+
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    return moduleName
+                }
+            }
+        }
+
+        return nil
     }
     
     public func setIdleTime(seconds: Int) throws {
