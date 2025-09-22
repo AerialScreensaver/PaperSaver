@@ -65,12 +65,12 @@ final class ScreensaverManagerReadOnlyTests: XCTestCase {
     }
     
     // MARK: - Current State Tests
-    
+
     func testGetCurrentScreensaver() {
         if let current = manager.getActiveScreensaver(for: nil) {
             print("\n🎬 Current screensaver: \(current.name)")
             XCTAssertFalse(current.name.isEmpty, "Screensaver name should not be empty")
-            
+
             // Verify it exists in the list of available screensavers
             let available = manager.listAvailableScreensavers()
             let exists = available.contains { $0.name == current.name }
@@ -78,6 +78,44 @@ final class ScreensaverManagerReadOnlyTests: XCTestCase {
         } else {
             print("\n⚠️ No screensaver currently set")
         }
+    }
+
+    func testGetActiveScreensavers() {
+        let screensavers = manager.getActiveScreensavers()
+
+        print("\n🖥️ Active screensavers across all spaces on connected displays:")
+
+        if screensavers.isEmpty {
+            print("  ⚠️ No screensavers found")
+        } else {
+            print("  Found \(screensavers.count) unique screensaver(s):")
+
+            for (index, screensaverName) in screensavers.enumerated() {
+                print("    [\(index)] \(screensaverName)")
+            }
+
+            // Verify each screensaver name is valid
+            for screensaverName in screensavers {
+                XCTAssertFalse(screensaverName.isEmpty, "Screensaver name should not be empty")
+            }
+
+            // Verify array is sorted and deduplicated
+            let sortedNames = Array(Set(screensavers)).sorted()
+            XCTAssertEqual(screensavers, sortedNames, "Array should be sorted and contain no duplicates")
+
+            // Compare with single getActiveScreensaver call
+            if let singleScreensaver = manager.getActiveScreensaver(for: nil) {
+                let foundInArray = screensavers.contains(singleScreensaver.name)
+                XCTAssertTrue(foundInArray, "Single screensaver should be in the array of all screensavers")
+            }
+        }
+
+        // Get system info for context
+        let screenCount = NSScreen.screens.count
+        print("\n  System has \(screenCount) screen(s)")
+
+        // Verify we have reasonable number of screensavers (could be many if different spaces use different screensavers)
+        XCTAssertLessThanOrEqual(screensavers.count, 50, "Should not have an unreasonable number of screensavers")
     }
     
     func testGetIdleTime() {

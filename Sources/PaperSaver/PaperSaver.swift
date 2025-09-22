@@ -25,7 +25,11 @@ public class PaperSaver {
     public func getActiveScreensaver(for screen: NSScreen? = nil) -> ScreensaverInfo? {
         return screensaverManager.getActiveScreensaver(for: screen)
     }
-    
+
+    public func getActiveScreensavers() -> [String] {
+        return screensaverManager.getActiveScreensavers()
+    }
+
     public func setIdleTime(seconds: Int) throws {
         try screensaverManager.setIdleTime(seconds: seconds)
     }

@@ -12,6 +12,7 @@ func CGSCopyManagedDisplaySpaces(_ cid: UInt32) -> CFArray
 public protocol ScreensaverManaging {
     func setScreensaver(module: String, screen: NSScreen?) async throws
     func getActiveScreensaver(for screen: NSScreen?) -> ScreensaverInfo?
+    func getActiveScreensavers() -> [String]
     func setIdleTime(seconds: Int) throws
     func getIdleTime() -> Int
     func listAvailableScreensavers() -> [ScreensaverModule]
@@ -69,15 +70,15 @@ public class ScreensaverManager: ScreensaverManaging {
         if #available(macOS 14.0, *) {
             // Sonoma+: Get screensaver from wallpaper plist
             let indexPath = SystemPaths.wallpaperIndexPath
-            
+
             guard let plist = try? plistManager.read(at: indexPath) else {
                 return nil
             }
-            
+
             if let screen = screen,
                let screenID = ScreenIdentifier(from: screen) {
                 let displayKey = screenID.displayID.description
-                
+
                 if let displays = plist["Displays"] as? [String: Any],
                    let displayConfig = displays[displayKey] as? [String: Any],
                    let idle = displayConfig["Idle"] as? [String: Any],
@@ -85,7 +86,7 @@ public class ScreensaverManager: ScreensaverManaging {
                    let choices = content["Choices"] as? [[String: Any]],
                    let firstChoice = choices.first,
                    let configurationData = firstChoice["Configuration"] as? Data {
-                    
+
                     if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
                         return ScreensaverInfo(
                             name: moduleName,
@@ -103,7 +104,7 @@ public class ScreensaverManager: ScreensaverManaging {
                            let choices = content["Choices"] as? [[String: Any]],
                            let firstChoice = choices.first,
                            let configurationData = firstChoice["Configuration"] as? Data {
-                            
+
                             if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
                                 return ScreensaverInfo(
                                     name: moduleName,
@@ -115,10 +116,64 @@ public class ScreensaverManager: ScreensaverManaging {
                     }
                 }
             }
-            
+
             return nil
         } else {
             return getLegacyScreensaver()
+        }
+    }
+
+    public func getActiveScreensavers() -> [String] {
+        if #available(macOS 14.0, *) {
+            // Sonoma+: Get screensaver names from all spaces on connected displays
+            var screensaverNames = Set<String>()
+
+            // Get all currently connected screens for filtering
+            let screens = NSScreen.screens
+            let connectedDisplayUUIDs = Set(screens.compactMap { getDisplayUUID(for: $0) })
+
+            // Get all active spaces (non-historical)
+            let activeSpaces = getAllSpaces(includeHistorical: false)
+
+            for space in activeSpaces {
+                // Check if this space has displays that are currently connected
+                let spaceConnectedDisplays = space.displayUUIDs.filter { connectedDisplayUUIDs.contains($0) }
+
+                // Skip spaces that don't have any connected displays
+                guard !spaceConnectedDisplays.isEmpty else { continue }
+
+                // Read space configuration from plist
+                let indexPath = SystemPaths.wallpaperIndexPath
+                guard let plist = try? plistManager.read(at: indexPath),
+                      let spacesConfig = plist["Spaces"] as? [String: Any],
+                      let spaceConfig = spacesConfig[space.uuid] as? [String: Any],
+                      let spaceDisplays = spaceConfig["Displays"] as? [String: Any] else {
+                    continue
+                }
+
+                // Extract screensaver names from connected displays in this space
+                for displayUUID in spaceConnectedDisplays {
+                    if let displayConfig = spaceDisplays[displayUUID] as? [String: Any],
+                       let idle = displayConfig["Idle"] as? [String: Any],
+                       let content = idle["Content"] as? [String: Any],
+                       let choices = content["Choices"] as? [[String: Any]],
+                       let firstChoice = choices.first,
+                       let configurationData = firstChoice["Configuration"] as? Data {
+
+                        if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                            screensaverNames.insert(moduleName)
+                        }
+                    }
+                }
+            }
+
+            return Array(screensaverNames).sorted()
+        } else {
+            // Legacy: Return single screensaver name if available
+            if let screensaver = getLegacyScreensaver() {
+                return [screensaver.name]
+            }
+            return []
         }
     }
     

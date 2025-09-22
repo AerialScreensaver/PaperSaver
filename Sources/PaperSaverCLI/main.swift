@@ -647,7 +647,107 @@ struct PaperSaverCLI {
     }
     
     @available(macOS 14.0, *)
+    static func getWallpaperForSpace(_ paperSaver: PaperSaver, spaceUUID: String, debug: Bool = false) -> String? {
+        let plistManager = PlistManager.shared
+        let indexPath = SystemPaths.wallpaperIndexPath
+        
+        // Handle empty UUID case - fallback to default space configuration
+        let lookupUUID = spaceUUID.isEmpty ? "" : spaceUUID
+        
+        if debug {
+            print("DEBUG: Looking up wallpaper for space UUID: '\(spaceUUID)'")
+            print("DEBUG: Using lookup UUID: '\(lookupUUID)'")
+        }
+        
+        guard let plist = try? plistManager.read(at: indexPath),
+              let spaces = plist["Spaces"] as? [String: Any] else {
+            if debug { print("DEBUG: Failed to read plist or no Spaces found") }
+            return nil
+        }
+        
+        if debug {
+            print("DEBUG: Found \(spaces.keys.count) space configurations in plist")
+        }
+        
+        // Try the specific space UUID first
+        var spaceConfig: [String: Any]?
+        if let config = spaces[lookupUUID] as? [String: Any] {
+            spaceConfig = config
+            if debug { print("DEBUG: Found exact match for UUID '\(lookupUUID)'") }
+        } else if !lookupUUID.isEmpty {
+            // If specific UUID not found and it's not empty, try empty string (default)
+            spaceConfig = spaces[""] as? [String: Any]
+            if debug { 
+                if spaceConfig != nil {
+                    print("DEBUG: UUID '\(lookupUUID)' not found, using default space configuration")
+                } else {
+                    print("DEBUG: UUID '\(lookupUUID)' not found, and no default configuration available")
+                }
+            }
+        }
+        
+        // Look for wallpaper in Default → Desktop → Content → Choices
+        guard let config = spaceConfig,
+              let defaultConfig = config["Default"] as? [String: Any],
+              let desktop = defaultConfig["Desktop"] as? [String: Any],
+              let content = desktop["Content"] as? [String: Any],
+              let choices = content["Choices"] as? [[String: Any]],
+              let firstChoice = choices.first,
+              let provider = firstChoice["Provider"] as? String else {
+            if debug { print("DEBUG: No valid wallpaper configuration found in space") }
+            return nil
+        }
+        
+        if debug {
+            print("DEBUG: Wallpaper provider: '\(provider)'")
+        }
+        
+        // Only process image wallpapers
+        guard provider == "com.apple.wallpaper.choice.image" else {
+            if debug { print("DEBUG: Provider is not an image type: \(provider)") }
+            // Return a descriptive name for non-image wallpapers
+            switch provider {
+            case "com.apple.wallpaper.choice.dynamic":
+                return "Dynamic Wallpaper"
+            case "com.apple.wallpaper.choice.sequoia":
+                return "Sequoia Video"
+            case "com.apple.wallpaper.choice.macintosh":
+                return "Classic Mac"
+            default:
+                return "System Wallpaper"
+            }
+        }
+        
+        guard let configurationData = firstChoice["Configuration"] as? Data else {
+            if debug { print("DEBUG: No configuration data found") }
+            return nil
+        }
+        
+        // Decode the wallpaper path from configuration
+        if let urlString = try? plistManager.decodeWallpaperConfiguration(from: configurationData),
+           let url = URL(string: urlString) {
+            if debug {
+                print("DEBUG: Decoded wallpaper URL: \(url)")
+            }
+            // Return the full path
+            return url.path
+        }
+        
+        if debug { print("DEBUG: Failed to decode wallpaper configuration") }
+        return nil
+    }
+    
+    @available(macOS 14.0, *)
     static func printSpaceTree(_ paperSaver: PaperSaver, _ spaceTree: [String: Any], debug: Bool = false) {
+        // ANSI color codes
+        let displayColor = "\u{001B}[1;36m"      // Bold cyan
+        let spaceColor = "\u{001B}[1;33m"        // Bold yellow
+        let activeColor = "\u{001B}[1;32m"       // Bold green
+        let uuidColor = "\u{001B}[34m"           // Blue
+        let wallpaperColor = "\u{001B}[35m"      // Magenta
+        let screensaverColor = "\u{001B}[36m"    // Cyan
+        let reset = "\u{001B}[0m"                // Reset
+        
         guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
             print("No space data available")
             return
@@ -658,7 +758,7 @@ struct PaperSaverCLI {
             return
         }
         
-        print("Spaces (Tree View):")
+        print("Spaces (Enhanced Tree View):")
         print("=" * 50)
         
         var totalSpaces = 0
@@ -667,36 +767,40 @@ struct PaperSaverCLI {
         for monitor in monitors {
             guard let name = monitor["name"] as? String,
                   let displayNumber = monitor["display_number"] as? Int,
+                  let displayUUID = monitor["uuid"] as? String,
                   let spaces = monitor["spaces"] as? [[String: Any]] else {
                 continue
             }
             
-            print("\nDisplay \(displayNumber): \(name)")
+            // Display header with UUID prominently shown
+            print("\n\(displayColor)Display \(displayNumber)\(reset): \(name) \(uuidColor)(UUID: \(displayUUID))\(reset)")
             
             for space in spaces {
                 guard let spaceNumber = space["space_number"] as? Int,
                       let spaceID = space["id"] as? NSNumber,
-                      let managedID = space["managed_id"] as? NSNumber,
+                      let _ = space["managed_id"] as? NSNumber,
                       let spaceUUID = space["uuid"] as? String,
                       let isCurrent = space["is_current"] as? Bool else {
                     continue
                 }
                 
-                let currentIndicator = isCurrent ? " (Current)" : ""
-                print("  Space \(spaceNumber): ID=\(spaceID)\(currentIndicator)")
-                print("    UUID: \(spaceUUID)")
+                let currentMarker = isCurrent ? " \(activeColor)[ACTIVE]\(reset)" : ""
+                print("  \(spaceColor)Space \(spaceNumber)\(reset): Desktop \(spaceNumber)\(currentMarker)")
                 
-                // Get and display screensaver info
+                // Get wallpaper for this space
+                let wallpaperInfo = getWallpaperForSpace(paperSaver, spaceUUID: spaceUUID, debug: debug) ?? "None"
+                print("    └─ \(wallpaperColor)Wallpaper\(reset): \(wallpaperInfo)")
+                
+                // Get screensaver for this space
                 if debug {
                     print("    === SCREENSAVER DEBUG FOR SPACE \(spaceNumber) ===")
                 }
-                if let screensaverName = getScreensaverForSpace(paperSaver, spaceUUID: spaceUUID, debug: debug) {
-                    print("    Screensaver: \(screensaverName)")
-                } else {
-                    print("    Screensaver: None")
-                }
+                let screensaver = getScreensaverForSpace(paperSaver, spaceUUID: spaceUUID, debug: debug) ?? "None"
+                print("    └─ \(screensaverColor)Screensaver\(reset): \(screensaver)")
                 if debug {
                     print("    === END SCREENSAVER DEBUG ===")
+                    print("    └─ \(uuidColor)UUID\(reset): \(spaceUUID)")
+                    print("    └─ \(uuidColor)ID\(reset): \(spaceID)")
                 }
                 
                 totalSpaces += 1

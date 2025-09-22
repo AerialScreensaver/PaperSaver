@@ -123,21 +123,21 @@ public class WallpaperManager: WallpaperManaging {
         
         var spaces = plist["Spaces"] as? [String: Any] ?? [:]
         var spaceConfig = spaces[spaceUUID] as? [String: Any] ?? [:]
-        var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
         
         if let screen = screen,
            let screenID = ScreenIdentifier(from: screen) {
             let displayKey = screenID.displayID.description
+            var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
             var displayConfig = spaceDisplays[displayKey] as? [String: Any] ?? ["Type": "individual"]
             displayConfig["Desktop"] = createDesktopConfiguration(with: configurationData, options: optionsData)
             spaceDisplays[displayKey] = displayConfig
+            spaceConfig["Displays"] = spaceDisplays
         } else {
             var defaultConfig = spaceConfig["Default"] as? [String: Any] ?? ["Type": "individual"]
             defaultConfig["Desktop"] = createDesktopConfiguration(with: configurationData, options: optionsData)
             spaceConfig["Default"] = defaultConfig
         }
         
-        spaceConfig["Displays"] = spaceDisplays
         spaces[spaceUUID] = spaceConfig
         plist["Spaces"] = spaces
         
@@ -243,31 +243,28 @@ public class WallpaperManager: WallpaperManaging {
             throw PaperSaverError.spaceNotFound
         }
         
-        let screens = NSScreen.screens
-        let screen = screens.first { screen in
-            if let screenNumber = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID {
-                let screenDisplayNumber = CGDisplayUnitNumber(screenNumber)
-                return screenDisplayNumber == displayNumber
-            }
-            return false
-        }
-        
-        try await setWallpaperForSpace(imageURL: imageURL, spaceUUID: spaceUUID, screen: screen, options: options)
+        // Pass nil for screen, just like setScreensaverForDisplaySpace does
+        // This ensures we use the Default config which applies to the space
+        try await setWallpaperForSpace(imageURL: imageURL, spaceUUID: spaceUUID, screen: nil, options: options)
     }
     
     private func createDesktopConfiguration(with configurationData: Data, options: Data) -> [String: Any] {
-        return [
-            "Content": [
-                "Choices": [
-                    [
-                        "Configuration": configurationData,
-                        "Files": [],
-                        "Provider": "com.apple.wallpaper.choice.image"
-                    ]
-                ],
-                "EncodedOptionValues": options,
-                "Shuffle": NSNull()
+        var content: [String: Any] = [
+            "Choices": [
+                [
+                    "Configuration": configurationData,
+                    "Files": [],
+                    "Provider": "com.apple.wallpaper.choice.image"
+                ]
             ],
+            "EncodedOptionValues": options
+        ]
+        
+        // Don't add Shuffle key at all to avoid NSNull issues
+        // The system will handle the default value
+        
+        return [
+            "Content": content,
             "LastSet": Date(),
             "LastUse": Date()
         ]

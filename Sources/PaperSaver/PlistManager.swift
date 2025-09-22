@@ -57,7 +57,7 @@ public final class PlistManager: @unchecked Sendable {
             
             try data.write(to: url)
         } catch {
-                        throw PaperSaverError.plistWriteError(path)
+            throw PaperSaverError.plistWriteError("\(path): \(error.localizedDescription)")
         }
     }
     

@@ -39,9 +39,9 @@ public class ConfigurationManager {
         
         if let shuffle = content.shuffle {
             contentDict["Shuffle"] = shuffle
-        } else {
-            contentDict["Shuffle"] = NSNull()
         }
+        // Don't add Shuffle key if it's nil to avoid NSNull issues
+        // The system will handle the default value
         
         return contentDict
     }

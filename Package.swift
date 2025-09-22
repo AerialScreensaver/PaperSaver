@@ -18,6 +18,10 @@ let package = Package(
             name: "papersaver",
             targets: ["PaperSaverCLI"]
         ),
+        .executable(
+            name: "show-output",
+            targets: ["ShowOutput"]
+        ),
     ],
     targets: [
         // Targets are the basic building blocks of a package, defining a module or a test suite.
@@ -27,6 +31,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "PaperSaverCLI",
+            dependencies: ["PaperSaver"]
+        ),
+        .executableTarget(
+            name: "ShowOutput",
             dependencies: ["PaperSaver"]
         ),
         .testTarget(

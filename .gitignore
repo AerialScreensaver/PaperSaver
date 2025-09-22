@@ -29,3 +29,7 @@ Icon
 Network Trash Folder
 Temporary Items
 .apdisk
+
+# Scripts - Generated/temporary files
+Scripts/baseline-*.plist
+Scripts/working-*.plist
