@@ -185,22 +185,48 @@ public class ScreensaverManager: ScreensaverManaging {
         // Handle empty UUID case - fallback to default space configuration
         let lookupUUID = spaceUUID.isEmpty ? "" : spaceUUID
 
-        guard let plist = try? plistManager.read(at: indexPath),
-              let spaces = plist["Spaces"] as? [String: Any] else {
+        guard let plist = try? plistManager.read(at: indexPath) else {
             return nil
         }
 
-        // Try the specific space UUID first
+        // Check if we have a Spaces structure (multi-space configuration)
         var spaceConfig: [String: Any]?
-        if let config = spaces[lookupUUID] as? [String: Any] {
-            spaceConfig = config
-        } else if !lookupUUID.isEmpty {
-            // If specific UUID not found and it's not empty, try empty string (default)
-            spaceConfig = spaces[""] as? [String: Any]
+
+        if let spaces = plist["Spaces"] as? [String: Any] {
+            // Try the specific space UUID first
+            if let config = spaces[lookupUUID] as? [String: Any] {
+                spaceConfig = config
+            } else if !lookupUUID.isEmpty {
+                // If specific UUID not found and it's not empty, try empty string (default)
+                spaceConfig = spaces[""] as? [String: Any]
+            }
+        } else if let systemDefault = plist["SystemDefault"] as? [String: Any] {
+            // Handle single screen/space configuration with SystemDefault
+            spaceConfig = systemDefault
         }
 
         guard let config = spaceConfig else {
             return nil
+        }
+
+        // Check if Idle is directly in config (SystemDefault case)
+        if let idle = config["Idle"] as? [String: Any],
+           let content = idle["Content"] as? [String: Any],
+           let choices = content["Choices"] as? [[String: Any]],
+           let firstChoice = choices.first,
+           let configurationData = firstChoice["Configuration"] as? Data {
+
+            // Use the new type-aware decoding method
+            if let (name, _) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                if let screensaverName = name {
+                    return screensaverName
+                }
+            }
+
+            // Fallback to old method for compatibility
+            if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                return moduleName
+            }
         }
 
         // For ALL spaces, prioritize Default -> Idle over Displays
