@@ -59,8 +59,14 @@ public class ScreensaverManager: ScreensaverManaging {
     
     public func setScreensaver(module: String, screen: NSScreen?) async throws {
         if #available(macOS 14.0, *) {
-            // Sonoma+: Set screensaver on every display (consistent behavior across all displays)
-            try await setScreensaverEverywhere(module: module)
+            // Sonoma+: Set screensaver appropriately based on configuration
+            if screen == nil {
+                // No specific screen - set everywhere
+                try await setScreensaverEverywhere(module: module)
+            } else {
+                // Specific screen requested - set for default/current space on that screen
+                try await setScreensaverForDefaultSpace(module: module, screen: screen)
+            }
         } else {
             try setLegacyScreensaver(module: module)
         }
@@ -192,7 +198,7 @@ public class ScreensaverManager: ScreensaverManaging {
         // Check if we have a Spaces structure (multi-space configuration)
         var spaceConfig: [String: Any]?
 
-        if let spaces = plist["Spaces"] as? [String: Any] {
+        if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
             // Try the specific space UUID first
             if let config = spaces[lookupUUID] as? [String: Any] {
                 spaceConfig = config
@@ -200,8 +206,11 @@ public class ScreensaverManager: ScreensaverManaging {
                 // If specific UUID not found and it's not empty, try empty string (default)
                 spaceConfig = spaces[""] as? [String: Any]
             }
+        } else if let allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
+            // Handle single screen/space configuration with AllSpacesAndDisplays (takes precedence)
+            spaceConfig = allSpacesAndDisplays
         } else if let systemDefault = plist["SystemDefault"] as? [String: Any] {
-            // Handle single screen/space configuration with SystemDefault
+            // Handle single screen/space configuration with SystemDefault (fallback)
             spaceConfig = systemDefault
         }
 
@@ -568,26 +577,85 @@ public class ScreensaverManager: ScreensaverManaging {
     }
     
     @available(macOS 14.0, *)
-    public func setScreensaverForSpace(module: String, spaceUUID: String, screen: NSScreen? = nil) async throws {
-        // Skip empty UUIDs to prevent corruption
-        guard !spaceUUID.isEmpty else {
-            throw PaperSaverError.invalidConfiguration("Space UUID cannot be empty")
-        }
+    private func setScreensaverForDefaultSpace(module: String, screen: NSScreen? = nil) async throws {
         let indexPath = SystemPaths.wallpaperIndexPath
-        
+
         guard var plist = try? plistManager.read(at: indexPath) else {
             throw PaperSaverError.plistReadError(indexPath)
         }
-        
+
         guard let moduleURL = SystemPaths.screensaverModuleURL(for: module) else {
             throw PaperSaverError.screensaverNotFound(module)
         }
-        
+
         let configurationData = try plistManager.createScreensaverConfiguration(moduleURL: moduleURL)
-        
+
+        // Check if we should use SystemDefault or Spaces with empty UUID
+        if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
+            // Use Spaces with empty UUID
+            var spacesDict = spaces
+            var spaceConfig = spacesDict[""] as? [String: Any] ?? [:]
+
+            // Write to Default section
+            var defaultConfig = spaceConfig["Default"] as? [String: Any] ?? ["Type": "individual"]
+            defaultConfig["Idle"] = createIdleConfiguration(with: configurationData)
+            spaceConfig["Default"] = defaultConfig
+
+            // Also write to Displays section for backward compatibility
+            var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
+            for screen in NSScreen.screens {
+                if let screenID = ScreenIdentifier(from: screen) {
+                    let displayKey = screenID.displayID.description
+                    var displayConfig: [String: Any] = ["Type": "individual"]
+                    displayConfig["Idle"] = createIdleConfiguration(with: configurationData)
+                    spaceDisplays[displayKey] = displayConfig
+                }
+            }
+            spaceConfig["Displays"] = spaceDisplays
+
+            spacesDict[""] = spaceConfig
+            plist["Spaces"] = spacesDict
+        } else {
+            // Use SystemDefault for single screen/space configuration
+            var systemDefault = plist["SystemDefault"] as? [String: Any] ?? ["Type": "individual"]
+            systemDefault["Idle"] = createIdleConfiguration(with: configurationData)
+            plist["SystemDefault"] = systemDefault
+
+            // Also update AllSpacesAndDisplays if it exists (it may take precedence)
+            if var allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
+                allSpacesAndDisplays["Idle"] = createIdleConfiguration(with: configurationData)
+                plist["AllSpacesAndDisplays"] = allSpacesAndDisplays
+            }
+        }
+
+        try plistManager.write(plist, to: indexPath)
+        restartWallpaperAgent()
+    }
+
+    @available(macOS 14.0, *)
+    public func setScreensaverForSpace(module: String, spaceUUID: String, screen: NSScreen? = nil) async throws {
+        // Handle empty UUID case - this means we're setting for the default/current space
+        if spaceUUID.isEmpty {
+            // For empty UUID, we need to determine if we should use SystemDefault or Spaces
+            try await setScreensaverForDefaultSpace(module: module, screen: screen)
+            return
+        }
+
+        let indexPath = SystemPaths.wallpaperIndexPath
+
+        guard var plist = try? plistManager.read(at: indexPath) else {
+            throw PaperSaverError.plistReadError(indexPath)
+        }
+
+        guard let moduleURL = SystemPaths.screensaverModuleURL(for: module) else {
+            throw PaperSaverError.screensaverNotFound(module)
+        }
+
+        let configurationData = try plistManager.createScreensaverConfiguration(moduleURL: moduleURL)
+
         // Get or create Spaces section
         var spaces = plist["Spaces"] as? [String: Any] ?? [:]
-        
+
         // Get or create the specific space
         var spaceConfig = spaces[spaceUUID] as? [String: Any] ?? [:]
 
@@ -642,27 +710,39 @@ public class ScreensaverManager: ScreensaverManaging {
     
     public func setScreensaverEverywhere(module: String) async throws {
         if #available(macOS 14.0, *) {
-            // Sonoma+: Get all displays and call setScreensaverForDisplay for each
-            let spaceTree = getNativeSpaceTree()
-            
-            guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
-                // Fallback to legacy method if no space data
-                try await setScreensaver(module: module, screen: nil)
-                return
+            // Check if we're in a single screen/space configuration
+            let indexPath = SystemPaths.wallpaperIndexPath
+            guard let plist = try? plistManager.read(at: indexPath) else {
+                throw PaperSaverError.plistReadError(indexPath)
             }
-            
-            // Extract all display numbers
-            let displayNumbers = monitors.compactMap { monitor in
-                monitor["display_number"] as? Int
-            }
-            
-            guard !displayNumbers.isEmpty else {
-                throw PaperSaverError.screensaverNotFound(module)
-            }
-            
-            // Set screensaver on each display
-            for displayNumber in displayNumbers {
-                try await setScreensaverForDisplay(module: module, displayNumber: displayNumber)
+
+            // Check if we should use SystemDefault
+            if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
+                // Multi-space configuration - use the existing logic
+                let spaceTree = getNativeSpaceTree()
+
+                guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
+                    // Fallback to setting default space
+                    try await setScreensaverForDefaultSpace(module: module, screen: nil)
+                    return
+                }
+
+                // Extract all display numbers
+                let displayNumbers = monitors.compactMap { monitor in
+                    monitor["display_number"] as? Int
+                }
+
+                guard !displayNumbers.isEmpty else {
+                    throw PaperSaverError.screensaverNotFound(module)
+                }
+
+                // Set screensaver on each display
+                for displayNumber in displayNumbers {
+                    try await setScreensaverForDisplay(module: module, displayNumber: displayNumber)
+                }
+            } else {
+                // Single screen/space configuration - use SystemDefault
+                try await setScreensaverForDefaultSpace(module: module, screen: nil)
             }
         } else {
             // Pre-Sonoma: Use legacy method to set on all screens

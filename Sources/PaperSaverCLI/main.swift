@@ -421,34 +421,45 @@ struct PaperSaverCLI {
             print("DEBUG: Using lookup UUID: '\(lookupUUID)'")
         }
         
-        guard let plist = try? plistManager.read(at: indexPath),
-              let spaces = plist["Spaces"] as? [String: Any] else {
-            if debug { print("DEBUG: Failed to read plist or no Spaces found") }
+        guard let plist = try? plistManager.read(at: indexPath) else {
+            if debug { print("DEBUG: Failed to read plist") }
             return nil
         }
-        
-        if debug {
-            print("DEBUG: Found \(spaces.keys.count) space configurations in plist")
-            print("DEBUG: Space keys available: \(spaces.keys.sorted())")
-        }
-        
-        // Try the specific space UUID first
+
+        // Check if we have a Spaces structure (multi-space configuration)
         var spaceConfig: [String: Any]?
-        if let config = spaces[lookupUUID] as? [String: Any] {
-            spaceConfig = config
-            if debug { print("DEBUG: Found exact match for UUID '\(lookupUUID)'") }
-        } else if !lookupUUID.isEmpty {
-            // If specific UUID not found and it's not empty, try empty string (default)
-            spaceConfig = spaces[""] as? [String: Any]
-            if debug { 
-                if spaceConfig != nil {
-                    print("DEBUG: UUID '\(lookupUUID)' not found, using default space configuration")
-                } else {
-                    print("DEBUG: UUID '\(lookupUUID)' not found, and no default configuration available")
+
+        if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
+            if debug {
+                print("DEBUG: Found \(spaces.keys.count) space configurations in plist")
+                print("DEBUG: Space keys available: \(spaces.keys.sorted())")
+            }
+
+            // Try the specific space UUID first
+            if let config = spaces[lookupUUID] as? [String: Any] {
+                spaceConfig = config
+                if debug { print("DEBUG: Found exact match for UUID '\(lookupUUID)'") }
+            } else if !lookupUUID.isEmpty {
+                // If specific UUID not found and it's not empty, try empty string (default)
+                spaceConfig = spaces[""] as? [String: Any]
+                if debug {
+                    if spaceConfig != nil {
+                        print("DEBUG: UUID '\(lookupUUID)' not found, using default space configuration")
+                    } else {
+                        print("DEBUG: UUID '\(lookupUUID)' not found, and no default configuration available")
+                    }
                 }
             }
+        } else if let allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
+            // Handle single screen/space configuration with AllSpacesAndDisplays (takes precedence)
+            if debug { print("DEBUG: No Spaces configurations found, using AllSpacesAndDisplays configuration") }
+            spaceConfig = allSpacesAndDisplays
+        } else if let systemDefault = plist["SystemDefault"] as? [String: Any] {
+            // Handle single screen/space configuration with SystemDefault (fallback)
+            if debug { print("DEBUG: No Spaces or AllSpacesAndDisplays found, using SystemDefault configuration") }
+            spaceConfig = systemDefault
         }
-        
+
         guard let config = spaceConfig else {
             if debug { print("DEBUG: No valid space config found") }
             return nil
@@ -456,6 +467,36 @@ struct PaperSaverCLI {
 
         if debug {
             print("DEBUG: Space UUID value: '\(spaceUUID)', isEmpty: \(spaceUUID.isEmpty)")
+        }
+
+        // Check if Idle is directly in config (SystemDefault case)
+        if let idle = config["Idle"] as? [String: Any],
+           let content = idle["Content"] as? [String: Any],
+           let choices = content["Choices"] as? [[String: Any]],
+           let firstChoice = choices.first,
+           let configurationData = firstChoice["Configuration"] as? Data {
+
+            if debug {
+                print("DEBUG: Using direct Idle configuration (SystemDefault)")
+            }
+
+            // Use the new type-aware decoding method
+            if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                if let screensaverName = name {
+                    if debug {
+                        print("DEBUG: Successfully decoded screensaver name from SystemDefault: '\(screensaverName)' type: '\(type.displayName)'")
+                    }
+                    return "\(screensaverName) (\(type.displayName))"
+                }
+            }
+
+            // Fallback to old method for compatibility
+            if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                if debug {
+                    print("DEBUG: Old method decoded module name from SystemDefault: '\(moduleName)'")
+                }
+                return moduleName
+            }
         }
 
         // For ALL spaces, prioritize Default -> Idle over Displays
@@ -709,33 +750,44 @@ struct PaperSaverCLI {
             print("DEBUG: Using lookup UUID: '\(lookupUUID)'")
         }
         
-        guard let plist = try? plistManager.read(at: indexPath),
-              let spaces = plist["Spaces"] as? [String: Any] else {
-            if debug { print("DEBUG: Failed to read plist or no Spaces found") }
+        guard let plist = try? plistManager.read(at: indexPath) else {
+            if debug { print("DEBUG: Failed to read plist") }
             return nil
         }
-        
-        if debug {
-            print("DEBUG: Found \(spaces.keys.count) space configurations in plist")
-        }
-        
-        // Try the specific space UUID first
+
+        // Check if we have a Spaces structure (multi-space configuration)
         var spaceConfig: [String: Any]?
-        if let config = spaces[lookupUUID] as? [String: Any] {
-            spaceConfig = config
-            if debug { print("DEBUG: Found exact match for UUID '\(lookupUUID)'") }
-        } else if !lookupUUID.isEmpty {
-            // If specific UUID not found and it's not empty, try empty string (default)
-            spaceConfig = spaces[""] as? [String: Any]
-            if debug { 
-                if spaceConfig != nil {
-                    print("DEBUG: UUID '\(lookupUUID)' not found, using default space configuration")
-                } else {
-                    print("DEBUG: UUID '\(lookupUUID)' not found, and no default configuration available")
+
+        if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
+            if debug {
+                print("DEBUG: Found \(spaces.keys.count) space configurations in plist")
+            }
+
+            // Try the specific space UUID first
+            if let config = spaces[lookupUUID] as? [String: Any] {
+                spaceConfig = config
+                if debug { print("DEBUG: Found exact match for UUID '\(lookupUUID)'") }
+            } else if !lookupUUID.isEmpty {
+                // If specific UUID not found and it's not empty, try empty string (default)
+                spaceConfig = spaces[""] as? [String: Any]
+                if debug {
+                    if spaceConfig != nil {
+                        print("DEBUG: UUID '\(lookupUUID)' not found, using default space configuration")
+                    } else {
+                        print("DEBUG: UUID '\(lookupUUID)' not found, and no default configuration available")
+                    }
                 }
             }
+        } else if let allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
+            // Handle single screen/space configuration with AllSpacesAndDisplays (takes precedence)
+            if debug { print("DEBUG: No Spaces configurations found, using AllSpacesAndDisplays configuration") }
+            spaceConfig = allSpacesAndDisplays
+        } else if let systemDefault = plist["SystemDefault"] as? [String: Any] {
+            // Handle single screen/space configuration with SystemDefault (fallback)
+            if debug { print("DEBUG: No Spaces or AllSpacesAndDisplays found, using SystemDefault configuration") }
+            spaceConfig = systemDefault
         }
-        
+
         guard let config = spaceConfig else {
             if debug { print("DEBUG: No valid space config found") }
             return nil
@@ -744,25 +796,48 @@ struct PaperSaverCLI {
         // For empty UUID (default space), prioritize Default → Desktop
         // For non-empty UUIDs, also use Default → Desktop (as they don't have Displays sections)
         // Look for wallpaper in Default → Desktop → Content → Choices
-        guard let defaultConfig = config["Default"] as? [String: Any],
-              let desktop = defaultConfig["Desktop"] as? [String: Any],
-              let content = desktop["Content"] as? [String: Any],
+
+        // First check if Desktop is directly in config (SystemDefault case)
+        var desktop: [String: Any]?
+        var provider: String?
+        var firstChoice: [String: Any]?
+
+        if let systemDesktop = config["Desktop"] as? [String: Any] {
+            // SystemDefault case - Desktop is directly in config
+            desktop = systemDesktop
+            if debug { print("DEBUG: Found Desktop directly in config (SystemDefault)") }
+        } else if let defaultConfig = config["Default"] as? [String: Any],
+                  let defaultDesktop = defaultConfig["Desktop"] as? [String: Any] {
+            // Spaces case - Desktop is under Default
+            desktop = defaultDesktop
+            if debug { print("DEBUG: Found Desktop under Default section") }
+        }
+
+        guard let desktopConfig = desktop,
+              let content = desktopConfig["Content"] as? [String: Any],
               let choices = content["Choices"] as? [[String: Any]],
-              let firstChoice = choices.first,
-              let provider = firstChoice["Provider"] as? String else {
+              let choice = choices.first else {
             if debug { print("DEBUG: No valid wallpaper configuration found in space") }
+            return nil
+        }
+
+        firstChoice = choice
+        provider = choice["Provider"] as? String
+
+        guard let providerName = provider else {
+            if debug { print("DEBUG: No provider found in wallpaper configuration") }
             return nil
         }
         
         if debug {
-            print("DEBUG: Wallpaper provider: '\(provider)'")
+            print("DEBUG: Wallpaper provider: '\(providerName)'")
         }
-        
+
         // Only process image wallpapers
-        guard provider == "com.apple.wallpaper.choice.image" else {
-            if debug { print("DEBUG: Provider is not an image type: \(provider)") }
+        guard providerName == "com.apple.wallpaper.choice.image" else {
+            if debug { print("DEBUG: Provider is not an image type: \(providerName)") }
             // Return a descriptive name for non-image wallpapers
-            switch provider {
+            switch providerName {
             case "com.apple.wallpaper.choice.dynamic":
                 return "Dynamic Wallpaper"
             case "com.apple.wallpaper.choice.sequoia":
@@ -774,7 +849,7 @@ struct PaperSaverCLI {
             }
         }
         
-        guard let configurationData = firstChoice["Configuration"] as? Data else {
+        guard let configurationData = firstChoice?["Configuration"] as? Data else {
             if debug { print("DEBUG: No configuration data found") }
             return nil
         }
