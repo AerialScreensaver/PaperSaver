@@ -68,51 +68,65 @@ public class ScreensaverManager: ScreensaverManaging {
     
     public func getActiveScreensaver(for screen: NSScreen?) -> ScreensaverInfo? {
         if #available(macOS 14.0, *) {
-            // Sonoma+: Get screensaver from wallpaper plist
-            let indexPath = SystemPaths.wallpaperIndexPath
+            // Sonoma+: Use the same Spaces structure approach as CLI and getActiveScreensavers
+            let spaceTree = getNativeSpaceTree()
 
-            guard let plist = try? plistManager.read(at: indexPath) else {
+            guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
                 return nil
             }
 
+            // If screen is specified, find the specific display
             if let screen = screen,
                let screenID = ScreenIdentifier(from: screen) {
-                let displayKey = screenID.displayID.description
+                let displayIDToFind = screenID.displayID.description
 
-                if let displays = plist["Displays"] as? [String: Any],
-                   let displayConfig = displays[displayKey] as? [String: Any],
-                   let idle = displayConfig["Idle"] as? [String: Any],
-                   let content = idle["Content"] as? [String: Any],
-                   let choices = content["Choices"] as? [[String: Any]],
-                   let firstChoice = choices.first,
-                   let configurationData = firstChoice["Configuration"] as? Data {
+                // Find the monitor with matching display UUID
+                for monitor in monitors {
+                    guard let displayUUID = monitor["uuid"] as? String,
+                          displayUUID == displayIDToFind,
+                          let spaces = monitor["spaces"] as? [[String: Any]] else {
+                        continue
+                    }
 
-                    if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
-                        return ScreensaverInfo(
-                            name: moduleName,
-                            identifier: moduleName,
-                            screen: screenID
-                        )
+                    // Get the current space for this display
+                    for space in spaces {
+                        guard let isCurrent = space["is_current"] as? Bool,
+                              isCurrent,
+                              let spaceUUID = space["uuid"] as? String else {
+                            continue
+                        }
+
+                        // Get screensaver for the current space
+                        if let screensaverName = getScreensaverForSpaceUUID(spaceUUID) {
+                            return ScreensaverInfo(
+                                name: screensaverName,
+                                identifier: screensaverName,
+                                screen: screenID
+                            )
+                        }
                     }
                 }
             } else {
-                if let displays = plist["Displays"] as? [String: Any] {
-                    for (_, displayValue) in displays {
-                        if let displayConfig = displayValue as? [String: Any],
-                           let idle = displayConfig["Idle"] as? [String: Any],
-                           let content = idle["Content"] as? [String: Any],
-                           let choices = content["Choices"] as? [[String: Any]],
-                           let firstChoice = choices.first,
-                           let configurationData = firstChoice["Configuration"] as? Data {
+                // No specific screen - get screensaver from any current space
+                for monitor in monitors {
+                    guard let spaces = monitor["spaces"] as? [[String: Any]] else {
+                        continue
+                    }
 
-                            if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
-                                return ScreensaverInfo(
-                                    name: moduleName,
-                                    identifier: moduleName
-                                )
-                            }
+                    for space in spaces {
+                        guard let isCurrent = space["is_current"] as? Bool,
+                              isCurrent,
+                              let spaceUUID = space["uuid"] as? String else {
+                            continue
                         }
-                        break
+
+                        // Get screensaver for this current space
+                        if let screensaverName = getScreensaverForSpaceUUID(spaceUUID) {
+                            return ScreensaverInfo(
+                                name: screensaverName,
+                                identifier: screensaverName
+                            )
+                        }
                     }
                 }
             }
@@ -185,8 +199,34 @@ public class ScreensaverManager: ScreensaverManaging {
             spaceConfig = spaces[""] as? [String: Any]
         }
 
-        guard let config = spaceConfig,
-              let displays = config["Displays"] as? [String: Any] else {
+        guard let config = spaceConfig else {
+            return nil
+        }
+
+        // For ALL spaces, prioritize Default -> Idle over Displays
+        // This ensures consistent behavior with CLI list-spaces command
+        if let defaultConfig = config["Default"] as? [String: Any],
+           let idle = defaultConfig["Idle"] as? [String: Any],
+           let content = idle["Content"] as? [String: Any],
+           let choices = content["Choices"] as? [[String: Any]],
+           let firstChoice = choices.first,
+           let configurationData = firstChoice["Configuration"] as? Data {
+
+            // Use the new type-aware decoding method
+            if let (name, _) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                if let screensaverName = name {
+                    return screensaverName
+                }
+            }
+
+            // Fallback to old method for compatibility
+            if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                return moduleName
+            }
+        }
+
+        // Fall back to Displays section (only if Default doesn't exist or fails)
+        guard let displays = config["Displays"] as? [String: Any] else {
             return nil
         }
 
@@ -524,8 +564,14 @@ public class ScreensaverManager: ScreensaverManaging {
         
         // Get or create the specific space
         var spaceConfig = spaces[spaceUUID] as? [String: Any] ?? [:]
-        
-        // Get or create Displays section for this space
+
+        // Write to BOTH Default and Displays sections for consistency
+        // Default section takes priority in reading, so write there first
+        var defaultConfig = spaceConfig["Default"] as? [String: Any] ?? ["Type": "individual"]
+        defaultConfig["Idle"] = createIdleConfiguration(with: configurationData)
+        spaceConfig["Default"] = defaultConfig
+
+        // Get or create Displays section for this space (for backward compatibility)
         var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
         
         if let screen = screen,
@@ -636,14 +682,23 @@ public class ScreensaverManager: ScreensaverManaging {
         
         for space in spaces {
             guard let uuid = space["uuid"] as? String else { continue }
-            
+
             // Set screensaver for this specific space (including empty UUID space)
             var spaceConfig = spacesConfig[uuid] as? [String: Any] ?? [:]
+
+            // Write to BOTH Default and Displays sections for consistency
+            // Default section takes priority in reading, so write there first
+            var defaultConfig = spaceConfig["Default"] as? [String: Any] ?? ["Type": "individual"]
+            defaultConfig["Idle"] = createIdleConfiguration(with: configurationData)
+            spaceConfig["Default"] = defaultConfig
+
+            // Also write to Displays section for backward compatibility
             var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
             var spaceDisplayConfig = spaceDisplays[displayUUID] as? [String: Any] ?? ["Type": "individual"]
             spaceDisplayConfig["Idle"] = createIdleConfiguration(with: configurationData)
             spaceDisplays[displayUUID] = spaceDisplayConfig
             spaceConfig["Displays"] = spaceDisplays
+
             spacesConfig[uuid] = spaceConfig
             spacesProcessed += 1
         }

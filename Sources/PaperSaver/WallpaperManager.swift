@@ -41,50 +41,153 @@ public class WallpaperManager: WallpaperManaging {
     
     public func getCurrentWallpaper(for screen: NSScreen?) -> WallpaperInfo? {
         if #available(macOS 14.0, *) {
-            let indexPath = SystemPaths.wallpaperIndexPath
-            
-            guard let plist = try? plistManager.read(at: indexPath) else {
+            // Use the same Spaces structure approach as other functions
+            guard let spaceTree = (screensaverManager as? SpaceManaging)?.getNativeSpaceTree(),
+                  let monitors = spaceTree["monitors"] as? [[String: Any]] else {
                 return nil
             }
-            
+
+            // If screen is specified, find the specific display
             if let screen = screen,
                let screenID = ScreenIdentifier(from: screen) {
-                let displayKey = screenID.displayID.description
-                
-                if let displays = plist["Displays"] as? [String: Any],
-                   let displayConfig = displays[displayKey] as? [String: Any],
-                   let desktop = displayConfig["Desktop"] as? [String: Any],
-                   let content = desktop["Content"] as? [String: Any],
-                   let choices = content["Choices"] as? [[String: Any]],
-                   let firstChoice = choices.first,
-                   let configurationData = firstChoice["Configuration"] as? Data {
-                    
-                    if let urlString = try? plistManager.decodeWallpaperConfiguration(from: configurationData),
-                       let url = URL(string: urlString) {
-                        
-                        var style: WallpaperStyle = .fill
-                        if let optionsData = content["EncodedOptionValues"] as? Data,
-                           let optionsPlist = try? plistManager.readBinaryPlist(from: optionsData),
-                           let values = optionsPlist["values"] as? [String: Any],
-                           let styleInfo = values["style"] as? [String: Any],
-                           let picker = styleInfo["picker"] as? [String: Any],
-                           let _0 = picker["_0"] as? [String: Any],
-                           let id = _0["id"] as? String,
-                           let parsedStyle = WallpaperStyle(rawValue: id) {
-                            style = parsedStyle
+                let displayIDToFind = screenID.displayID.description
+
+                // Find the monitor with matching display UUID
+                for monitor in monitors {
+                    guard let displayUUID = monitor["uuid"] as? String,
+                          displayUUID == displayIDToFind,
+                          let spaces = monitor["spaces"] as? [[String: Any]] else {
+                        continue
+                    }
+
+                    // Get the current space for this display
+                    for space in spaces {
+                        guard let isCurrent = space["is_current"] as? Bool,
+                              isCurrent,
+                              let spaceUUID = space["uuid"] as? String else {
+                            continue
                         }
-                        
-                        return WallpaperInfo(imageURL: url, style: style, screen: screenID)
+
+                        // Get wallpaper for the current space using Default section prioritization
+                        if let wallpaperInfo = getWallpaperForSpaceUUID(spaceUUID, screenID: screenID) {
+                            return wallpaperInfo
+                        }
+                    }
+                }
+            } else {
+                // No specific screen - get wallpaper from any current space
+                for monitor in monitors {
+                    guard let spaces = monitor["spaces"] as? [[String: Any]] else {
+                        continue
+                    }
+
+                    for space in spaces {
+                        guard let isCurrent = space["is_current"] as? Bool,
+                              isCurrent,
+                              let spaceUUID = space["uuid"] as? String else {
+                            continue
+                        }
+
+                        // Get wallpaper for this current space
+                        if let wallpaperInfo = getWallpaperForSpaceUUID(spaceUUID, screenID: nil) {
+                            return wallpaperInfo
+                        }
                     }
                 }
             }
+
+            return nil
         } else {
             return getLegacyWallpaper(for: screen)
         }
-        
+    }
+
+    @available(macOS 14.0, *)
+    private func getWallpaperForSpaceUUID(_ spaceUUID: String, screenID: ScreenIdentifier?) -> WallpaperInfo? {
+        let indexPath = SystemPaths.wallpaperIndexPath
+
+        // Handle empty UUID case - fallback to default space configuration
+        let lookupUUID = spaceUUID.isEmpty ? "" : spaceUUID
+
+        guard let plist = try? plistManager.read(at: indexPath),
+              let spaces = plist["Spaces"] as? [String: Any] else {
+            return nil
+        }
+
+        // Try the specific space UUID first
+        var spaceConfig: [String: Any]?
+        if let config = spaces[lookupUUID] as? [String: Any] {
+            spaceConfig = config
+        } else if !lookupUUID.isEmpty {
+            // If specific UUID not found and it's not empty, try empty string (default)
+            spaceConfig = spaces[""] as? [String: Any]
+        }
+
+        guard let config = spaceConfig else {
+            return nil
+        }
+
+        // For ALL spaces, prioritize Default -> Desktop over Displays
+        // This ensures consistent behavior with the rest of the API
+        if let defaultConfig = config["Default"] as? [String: Any],
+           let desktop = defaultConfig["Desktop"] as? [String: Any],
+           let content = desktop["Content"] as? [String: Any],
+           let choices = content["Choices"] as? [[String: Any]],
+           let firstChoice = choices.first,
+           let configurationData = firstChoice["Configuration"] as? Data {
+
+            if let urlString = try? plistManager.decodeWallpaperConfiguration(from: configurationData),
+               let url = URL(string: urlString) {
+
+                var style: WallpaperStyle = .fill
+                if let optionsData = content["EncodedOptionValues"] as? Data,
+                   let optionsPlist = try? plistManager.readBinaryPlist(from: optionsData),
+                   let values = optionsPlist["values"] as? [String: Any],
+                   let styleInfo = values["style"] as? [String: Any],
+                   let picker = styleInfo["picker"] as? [String: Any],
+                   let _0 = picker["_0"] as? [String: Any],
+                   let id = _0["id"] as? String,
+                   let parsedStyle = WallpaperStyle(rawValue: id) {
+                    style = parsedStyle
+                }
+
+                return WallpaperInfo(imageURL: url, style: style, screen: screenID)
+            }
+        }
+
+        // Fall back to Displays section (only if Default doesn't exist or fails)
+        if let displays = config["Displays"] as? [String: Any],
+           let screenID = screenID {
+            let displayKey = screenID.displayID.description
+
+            if let displayConfig = displays[displayKey] as? [String: Any],
+               let desktop = displayConfig["Desktop"] as? [String: Any],
+               let content = desktop["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data,
+               let urlString = try? plistManager.decodeWallpaperConfiguration(from: configurationData),
+               let url = URL(string: urlString) {
+
+                var style: WallpaperStyle = .fill
+                if let optionsData = content["EncodedOptionValues"] as? Data,
+                   let optionsPlist = try? plistManager.readBinaryPlist(from: optionsData),
+                   let values = optionsPlist["values"] as? [String: Any],
+                   let styleInfo = values["style"] as? [String: Any],
+                   let picker = styleInfo["picker"] as? [String: Any],
+                   let _0 = picker["_0"] as? [String: Any],
+                   let id = _0["id"] as? String,
+                   let parsedStyle = WallpaperStyle(rawValue: id) {
+                    style = parsedStyle
+                }
+
+                return WallpaperInfo(imageURL: url, style: style, screen: screenID)
+            }
+        }
+
         return nil
     }
-    
+
     @available(macOS 14.0, *)
     public func setWallpaperForSpaceID(imageURL: URL, spaceID: Int, screen: NSScreen? = nil, options: WallpaperOptions = .default) async throws {
         guard FileManager.default.fileExists(atPath: imageURL.path) else {
@@ -217,11 +320,20 @@ public class WallpaperManager: WallpaperManaging {
             for space in spaces {
                 if let spaceUUID = space["space_uuid"] as? String {
                     var spaceConfig = spacesDict[spaceUUID] as? [String: Any] ?? [:]
+
+                    // Write to BOTH Default and Displays sections for consistency
+                    // Default section takes priority in reading, so write there first
+                    var defaultConfig = spaceConfig["Default"] as? [String: Any] ?? ["Type": "individual"]
+                    defaultConfig["Desktop"] = createDesktopConfiguration(with: configurationData, options: optionsData)
+                    spaceConfig["Default"] = defaultConfig
+
+                    // Also write to Displays section for backward compatibility
                     var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
                     var spaceDisplayConfig = spaceDisplays[displayUUID] as? [String: Any] ?? ["Type": "individual"]
                     spaceDisplayConfig["Desktop"] = createDesktopConfiguration(with: configurationData, options: optionsData)
                     spaceDisplays[displayUUID] = spaceDisplayConfig
                     spaceConfig["Displays"] = spaceDisplays
+
                     spacesDict[spaceUUID] = spaceConfig
                 }
             }

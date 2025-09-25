@@ -449,9 +449,59 @@ struct PaperSaverCLI {
             }
         }
         
-        guard let config = spaceConfig,
-              let displays = config["Displays"] as? [String: Any] else {
-            if debug { print("DEBUG: No valid space config or Displays found") }
+        guard let config = spaceConfig else {
+            if debug { print("DEBUG: No valid space config found") }
+            return nil
+        }
+
+        if debug {
+            print("DEBUG: Space UUID value: '\(spaceUUID)', isEmpty: \(spaceUUID.isEmpty)")
+        }
+
+        // For ALL spaces, prioritize Default -> Idle over Displays
+        // This ensures consistent behavior regardless of UUID
+        if debug {
+            print("DEBUG: Checking for Default section for space UUID '\(spaceUUID)'")
+            if let defaultConfig = config["Default"] as? [String: Any] {
+                print("DEBUG: Found Default config")
+                if let idle = defaultConfig["Idle"] as? [String: Any] {
+                    print("DEBUG: Found Idle in Default")
+                }
+            }
+        }
+        if let defaultConfig = config["Default"] as? [String: Any],
+           let idle = defaultConfig["Idle"] as? [String: Any],
+           let content = idle["Content"] as? [String: Any],
+           let choices = content["Choices"] as? [[String: Any]],
+           let firstChoice = choices.first,
+           let configurationData = firstChoice["Configuration"] as? Data {
+
+            if debug {
+                print("DEBUG: Using Default -> Idle configuration for space UUID '\(spaceUUID)'")
+            }
+
+            // Use the new type-aware decoding method
+            if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                if let screensaverName = name {
+                    if debug {
+                        print("DEBUG: Successfully decoded screensaver name from Default: '\(screensaverName)' type: '\(type.displayName)'")
+                    }
+                    return "\(screensaverName) (\(type.displayName))"
+                }
+            }
+
+            // Fallback to old method for compatibility
+            if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                if debug {
+                    print("DEBUG: Old method decoded module name from Default: '\(moduleName)'")
+                }
+                return moduleName
+            }
+        }
+
+        // Fall back to Displays section (only if Default doesn't exist or fails)
+        guard let displays = config["Displays"] as? [String: Any] else {
+            if debug { print("DEBUG: No Displays found in space config") }
             return nil
         }
         
@@ -686,9 +736,15 @@ struct PaperSaverCLI {
             }
         }
         
+        guard let config = spaceConfig else {
+            if debug { print("DEBUG: No valid space config found") }
+            return nil
+        }
+
+        // For empty UUID (default space), prioritize Default → Desktop
+        // For non-empty UUIDs, also use Default → Desktop (as they don't have Displays sections)
         // Look for wallpaper in Default → Desktop → Content → Choices
-        guard let config = spaceConfig,
-              let defaultConfig = config["Default"] as? [String: Any],
+        guard let defaultConfig = config["Default"] as? [String: Any],
               let desktop = defaultConfig["Desktop"] as? [String: Any],
               let content = desktop["Content"] as? [String: Any],
               let choices = content["Choices"] as? [[String: Any]],
@@ -785,7 +841,8 @@ struct PaperSaverCLI {
                 }
                 
                 let currentMarker = isCurrent ? " \(activeColor)[ACTIVE]\(reset)" : ""
-                print("  \(spaceColor)Space \(spaceNumber)\(reset): Desktop \(spaceNumber)\(currentMarker)")
+                let uuidDisplay = spaceUUID.isEmpty ? "(default)" : "(\(String(spaceUUID.prefix(8)))...)"
+                print("  \(spaceColor)Space \(spaceNumber)\(reset): Desktop \(spaceNumber) \(uuidDisplay)\(currentMarker)")
                 
                 // Get wallpaper for this space
                 let wallpaperInfo = getWallpaperForSpace(paperSaver, spaceUUID: spaceUUID, debug: debug) ?? "None"
