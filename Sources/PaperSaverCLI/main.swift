@@ -559,11 +559,27 @@ struct PaperSaverCLI {
             print("DEBUG: Available display keys in space: \(displays.keys.sorted())")
         }
         
+        // Helper function to validate display keys
+        func isValidDisplayKey(_ key: String) -> Bool {
+            // Valid display keys are UUIDs in format XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+            // Invalid keys include "Main", numeric strings, or other non-UUID formats
+            let uuidPattern = "^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$"
+            let regex = try? NSRegularExpression(pattern: uuidPattern, options: [.caseInsensitive])
+            let range = NSRange(location: 0, length: key.count)
+            return regex?.firstMatch(in: key, options: [], range: range) != nil
+        }
+
         // Find the connected display first, fall back to sorted order
         var displayKeysToCheck: [String] = []
-        
-        // First, add any connected displays
+
+        // First, add any connected displays (but only valid ones)
         for displayKey in displays.keys {
+            guard isValidDisplayKey(displayKey) else {
+                if debug {
+                    print("DEBUG: Skipping invalid display key: '\(displayKey)'")
+                }
+                continue
+            }
             if connectedUUIDs.contains(displayKey) {
                 displayKeysToCheck.append(displayKey)
                 if debug {
@@ -571,10 +587,10 @@ struct PaperSaverCLI {
                 }
             }
         }
-        
-        // Then add remaining displays in sorted order (for fallback)
-        let sortedDisplayKeys = displays.keys.sorted()
-        for displayKey in sortedDisplayKeys {
+
+        // Then add remaining valid displays in sorted order (for fallback)
+        let validDisplayKeys = displays.keys.filter(isValidDisplayKey).sorted()
+        for displayKey in validDisplayKeys {
             if !displayKeysToCheck.contains(displayKey) {
                 displayKeysToCheck.append(displayKey)
             }

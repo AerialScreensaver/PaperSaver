@@ -272,16 +272,20 @@ public class ScreensaverManager: ScreensaverManaging {
         // Find the connected display first, fall back to any display
         var displayKeysToCheck: [String] = []
 
-        // First, add any connected displays
+        // First, add any connected displays (but only valid ones)
         for displayKey in displays.keys {
+            // Skip invalid display keys (like "Main", numeric IDs, etc.)
+            guard isValidDisplayKey(displayKey) else {
+                continue
+            }
             if connectedUUIDs.contains(displayKey) {
                 displayKeysToCheck.append(displayKey)
             }
         }
 
-        // Then add remaining displays in sorted order (for fallback)
-        let sortedDisplayKeys = displays.keys.sorted()
-        for displayKey in sortedDisplayKeys {
+        // Then add remaining valid displays in sorted order (for fallback)
+        let validDisplayKeys = displays.keys.filter(isValidDisplayKey).sorted()
+        for displayKey in validDisplayKeys {
             if !displayKeysToCheck.contains(displayKey) {
                 displayKeysToCheck.append(displayKey)
             }
@@ -406,6 +410,9 @@ public class ScreensaverManager: ScreensaverManaging {
     
     
     private func createIdleConfiguration(with configurationData: Data) -> [String: Any] {
+        // Don't add EncodedOptionValues and Shuffle keys when they would be null
+        // This avoids NSNull serialization issues with binary plist format
+        // The system will handle default values appropriately
         return [
             "Content": [
                 "Choices": [
@@ -419,6 +426,15 @@ public class ScreensaverManager: ScreensaverManaging {
             "LastSet": Date(),
             "LastUse": Date()
         ]
+    }
+
+    private func isValidDisplayKey(_ key: String) -> Bool {
+        // Valid display keys are UUIDs in format XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+        // Invalid keys include "Main", numeric strings, or other non-UUID formats
+        let uuidPattern = "^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$"
+        let regex = try? NSRegularExpression(pattern: uuidPattern, options: [.caseInsensitive])
+        let range = NSRange(location: 0, length: key.count)
+        return regex?.firstMatch(in: key, options: [], range: range) != nil
     }
     
     private func setLegacyScreensaver(module: String) throws {
@@ -689,8 +705,12 @@ public class ScreensaverManager: ScreensaverManaging {
                     }
                 }
             } else {
-                // Update existing displays in this space only
+                // Update existing displays in this space only, but filter out invalid display keys
                 for displayKey in spaceDisplays.keys {
+                    // Skip invalid display keys (like "Main", numeric IDs, etc.)
+                    guard isValidDisplayKey(displayKey) else {
+                        continue
+                    }
                     var displayConfig = spaceDisplays[displayKey] as? [String: Any] ?? ["Type": "individual"]
                     displayConfig["Idle"] = createIdleConfiguration(with: configurationData)
                     spaceDisplays[displayKey] = displayConfig
