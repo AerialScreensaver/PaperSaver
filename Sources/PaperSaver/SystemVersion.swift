@@ -29,14 +29,10 @@ public struct SystemPaths {
     public static func screensaverModuleURL(for moduleName: String) -> URL? {
         for directory in screensaverModulesDirectories() {
             let saverURL = directory.appendingPathComponent("\(moduleName).saver")
-            let qtzURL = directory.appendingPathComponent("\(moduleName).qtz")
             let appexURL = directory.appendingPathComponent("\(moduleName).appex")
-            
+
             if FileManager.default.fileExists(atPath: saverURL.path) {
                 return saverURL
-            }
-            if FileManager.default.fileExists(atPath: qtzURL.path) {
-                return qtzURL
             }
             if FileManager.default.fileExists(atPath: appexURL.path) {
                 return appexURL

@@ -12,12 +12,6 @@ public enum ScreensaverType: String, Codable, CaseIterable {
     /// framework. Most third-party screensavers use this format.
     case traditional = "saver"
 
-    /// Quartz Composer screensaver (.qtz files).
-    ///
-    /// Legacy screensavers created with Quartz Composer. Less common
-    /// in modern macOS versions as Quartz Composer has been deprecated.
-    case quartz = "qtz"
-
     /// Modern App Extension screensavers (.appex bundles).
     ///
     /// New format introduced in macOS Monterey using ExtensionKit.
@@ -52,7 +46,6 @@ public enum ScreensaverType: String, Codable, CaseIterable {
     public var fileExtension: String {
         switch self {
         case .traditional: return "saver"
-        case .quartz: return "qtz"
         case .appExtension: return "appex"
         case .sequoiaVideo: return ""
         case .builtInMac, .defaultScreen: return ""
@@ -68,7 +61,7 @@ public enum ScreensaverType: String, Codable, CaseIterable {
     /// - Returns: Provider identifier string used by the system.
     public var providerIdentifier: String {
         switch self {
-        case .traditional, .quartz:
+        case .traditional:
             return "com.apple.wallpaper.choice.screen-saver"
         case .appExtension:
             return "com.apple.NeptuneOneExtension"
@@ -91,7 +84,6 @@ public enum ScreensaverType: String, Codable, CaseIterable {
     public var displayName: String {
         switch self {
         case .traditional: return "Screen Saver"
-        case .quartz: return "Quartz Composition"
         case .appExtension: return "App Extension"
         case .sequoiaVideo: return "Video Screensaver"
         case .builtInMac: return "Classic Mac"
@@ -129,7 +121,7 @@ public struct ScreensaverModule: Codable, Equatable {
     /// The technology type used by this screensaver.
     ///
     /// Indicates whether this is a traditional .saver bundle, modern
-    /// app extension, legacy Quartz composition, or other type.
+    /// app extension, or other type.
     public let type: ScreensaverType
 
     /// Whether this screensaver is provided by the system.

@@ -8,7 +8,6 @@ final class ScreensaverUnitTests: XCTestCase {
     
     func testScreensaverTypeFileExtensions() {
         XCTAssertEqual(ScreensaverType.traditional.fileExtension, "saver")
-        XCTAssertEqual(ScreensaverType.quartz.fileExtension, "qtz")
         XCTAssertEqual(ScreensaverType.appExtension.fileExtension, "appex")
         XCTAssertEqual(ScreensaverType.sequoiaVideo.fileExtension, "")
         XCTAssertEqual(ScreensaverType.builtInMac.fileExtension, "")
@@ -16,13 +15,11 @@ final class ScreensaverUnitTests: XCTestCase {
     }
     
     func testScreensaverTypeProviderIdentifiers() {
-        XCTAssertEqual(ScreensaverType.traditional.providerIdentifier, 
+        XCTAssertEqual(ScreensaverType.traditional.providerIdentifier,
                       "com.apple.wallpaper.choice.screen-saver")
-        XCTAssertEqual(ScreensaverType.quartz.providerIdentifier, 
-                      "com.apple.wallpaper.choice.screen-saver")
-        XCTAssertEqual(ScreensaverType.appExtension.providerIdentifier, 
+        XCTAssertEqual(ScreensaverType.appExtension.providerIdentifier,
                       "com.apple.NeptuneOneExtension")
-        XCTAssertEqual(ScreensaverType.sequoiaVideo.providerIdentifier, 
+        XCTAssertEqual(ScreensaverType.sequoiaVideo.providerIdentifier,
                       "com.apple.wallpaper.choice.sequoia")
         XCTAssertEqual(ScreensaverType.builtInMac.providerIdentifier,
                       "com.apple.wallpaper.choice.macintosh")
@@ -32,7 +29,6 @@ final class ScreensaverUnitTests: XCTestCase {
     
     func testScreensaverTypeDisplayNames() {
         XCTAssertEqual(ScreensaverType.traditional.displayName, "Screen Saver")
-        XCTAssertEqual(ScreensaverType.quartz.displayName, "Quartz Composition")
         XCTAssertEqual(ScreensaverType.appExtension.displayName, "App Extension")
         XCTAssertEqual(ScreensaverType.sequoiaVideo.displayName, "Video Screensaver")
         XCTAssertEqual(ScreensaverType.builtInMac.displayName, "Classic Mac")
@@ -42,9 +38,8 @@ final class ScreensaverUnitTests: XCTestCase {
     func testScreensaverTypeAllCases() {
         let allCases = ScreensaverType.allCases
         
-        XCTAssertEqual(allCases.count, 6)
+        XCTAssertEqual(allCases.count, 5)
         XCTAssertTrue(allCases.contains(.traditional))
-        XCTAssertTrue(allCases.contains(.quartz))
         XCTAssertTrue(allCases.contains(.appExtension))
         XCTAssertTrue(allCases.contains(.sequoiaVideo))
         XCTAssertTrue(allCases.contains(.builtInMac))
@@ -112,11 +107,7 @@ final class ScreensaverUnitTests: XCTestCase {
         let saverResult = try plistManager.decodeScreensaverConfigurationWithType(from: saverData)
         XCTAssertEqual(saverResult.type, .traditional)
         
-        // Test .qtz extension
-        let qtzURL = URL(string: "file:///Test.qtz")!
-        let qtzData = try plistManager.createScreensaverConfiguration(moduleURL: qtzURL)
-        let qtzResult = try plistManager.decodeScreensaverConfigurationWithType(from: qtzData)
-        XCTAssertEqual(qtzResult.type, .quartz)
+        // .qtz extension support has been removed (deprecated Quartz Composer)
         
         // Test .appex extension
         let appexURL = URL(string: "file:///Test.appex")!

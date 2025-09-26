@@ -126,7 +126,7 @@ public final class PlistManager: @unchecked Sendable {
     
     public func createScreensaverConfiguration(moduleURL: URL, type: ScreensaverType) throws -> Data {
         switch type {
-        case .traditional, .quartz:
+        case .traditional:
             return try createTraditionalScreensaverConfiguration(moduleURL: moduleURL)
         case .appExtension:
             return try createNeptuneExtensionConfiguration()
