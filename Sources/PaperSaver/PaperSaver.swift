@@ -79,13 +79,18 @@ public class PaperSaver {
     ///     an available screensaver from `listAvailableScreensavers()`.
     ///   - screen: The target screen to configure. If `nil`, applies to the
     ///     current or main screen.
+    ///   - skipRestart: If `true`, skips restarting WallpaperAgent and auto-rollback
+    ///     checks. Useful for testing or when multiple operations are batched.
+    ///   - enableDebug: When `true`, enables detailed debug logging for
+    ///     troubleshooting configuration issues.
     /// - Throws: `PaperSaverError.screensaverNotFound` if the specified module
     ///   doesn't exist, or `PaperSaverError.invalidConfiguration` if the
     ///   configuration cannot be applied.
     /// - Note: Changes take effect immediately but may require a moment to
-    ///   be reflected in the system preferences.
-    public func setScreensaver(module: String, for screen: NSScreen? = nil) async throws {
-        try await screensaverManager.setScreensaver(module: module, screen: screen)
+    ///   be reflected in the system preferences. Auto-rollback protection
+    ///   is active by default to detect and recover from WallpaperAgent corruption.
+    public func setScreensaver(module: String, for screen: NSScreen? = nil, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        try await screensaverManager.setScreensaver(module: module, screen: screen, skipRestart: skipRestart, enableDebug: enableDebug)
     }
 
     /// Sets the same screensaver across all screens and spaces.
@@ -94,16 +99,22 @@ public class PaperSaver {
     /// and spaces in the system, creating a unified screensaver experience.
     /// This is the most commonly used function for setting screensavers.
     ///
-    /// - Parameter module: The name of the screensaver module to activate
-    ///   system-wide. Must match an available screensaver from
-    ///   `listAvailableScreensavers()`.
+    /// - Parameters:
+    ///   - module: The name of the screensaver module to activate
+    ///     system-wide. Must match an available screensaver from
+    ///     `listAvailableScreensavers()`.
+    ///   - skipRestart: If `true`, skips restarting WallpaperAgent and auto-rollback
+    ///     checks. Useful for testing or when multiple operations are batched.
+    ///   - enableDebug: When `true`, enables detailed debug logging for
+    ///     troubleshooting configuration issues.
     /// - Throws: `PaperSaverError.screensaverNotFound` if the specified module
     ///   doesn't exist, or `PaperSaverError.invalidConfiguration` if the
     ///   configuration cannot be applied.
     /// - Note: This is equivalent to setting the screensaver in System
-    ///   Preferences for all screens and spaces at once.
-    public func setScreensaverEverywhere(module: String) async throws {
-        try await screensaverManager.setScreensaverEverywhere(module: module)
+    ///   Preferences for all screens and spaces at once. Auto-rollback protection
+    ///   is active by default to detect and recover from WallpaperAgent corruption.
+    public func setScreensaverEverywhere(module: String, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        try await screensaverManager.setScreensaverEverywhere(module: module, skipRestart: skipRestart, enableDebug: enableDebug)
     }
 
     // MARK: Advanced Screensaver Operations (macOS 14.0+)
@@ -120,13 +131,18 @@ public class PaperSaver {
     ///     space management functions to obtain valid UUIDs.
     ///   - screen: The target screen within the space. If `nil`, applies to
     ///     the main screen in that space.
+    ///   - skipRestart: When `true`, skips restarting the WallpaperAgent after
+    ///     configuration. Useful for batch operations or when restart will be
+    ///     handled separately.
+    ///   - enableDebug: When `true`, enables detailed debug logging for
+    ///     troubleshooting configuration issues.
     /// - Throws: `PaperSaverError.screensaverNotFound` if the module doesn't exist,
     ///   `PaperSaverError.spaceNotFound` if the UUID is invalid, or
     ///   `PaperSaverError.invalidConfiguration` for other configuration issues.
     /// - Note: This function requires macOS 14.0 or later for full space support.
     @available(macOS 14.0, *)
-    public func setScreensaverForSpace(module: String, spaceUUID: String, screen: NSScreen? = nil) async throws {
-        try await screensaverManager.setScreensaverForSpace(module: module, spaceUUID: spaceUUID, screen: screen)
+    public func setScreensaverForSpace(module: String, spaceUUID: String, screen: NSScreen? = nil, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        try await screensaverManager.setScreensaverForSpace(module: module, spaceUUID: spaceUUID, screen: screen, skipRestart: skipRestart, enableDebug: enableDebug)
     }
 
     /// Sets the screensaver for a specific space identified by numeric ID.
@@ -140,13 +156,18 @@ public class PaperSaver {
     ///   - spaceID: The numeric ID of the target space.
     ///   - screen: The target screen within the space. If `nil`, applies to
     ///     the main screen in that space.
+    ///   - skipRestart: When `true`, skips restarting the WallpaperAgent after
+    ///     configuration. Useful for batch operations or when restart will be
+    ///     handled separately.
+    ///   - enableDebug: When `true`, enables detailed debug logging for
+    ///     troubleshooting configuration issues.
     /// - Throws: `PaperSaverError.screensaverNotFound` if the module doesn't exist,
     ///   `PaperSaverError.spaceNotFound` if the space ID is invalid, or
     ///   `PaperSaverError.invalidConfiguration` for other configuration issues.
     /// - Note: Space IDs may change when spaces are created or destroyed.
     @available(macOS 14.0, *)
-    public func setScreensaverForSpaceID(module: String, spaceID: Int, screen: NSScreen? = nil) async throws {
-        try await screensaverManager.setScreensaverForSpaceID(module: module, spaceID: spaceID, screen: screen)
+    public func setScreensaverForSpaceID(module: String, spaceID: Int, screen: NSScreen? = nil, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        try await screensaverManager.setScreensaverForSpaceID(module: module, spaceID: spaceID, screen: screen, skipRestart: skipRestart, enableDebug: enableDebug)
     }
 
     /// Sets the screensaver for all spaces on a specific display.
@@ -164,8 +185,8 @@ public class PaperSaver {
     ///   `PaperSaverError.invalidConfiguration` for other configuration issues.
     /// - Note: Display numbers correspond to the system's display arrangement.
     @available(macOS 14.0, *)
-    public func setScreensaverForDisplay(module: String, displayNumber: Int) async throws {
-        try await screensaverManager.setScreensaverForDisplay(module: module, displayNumber: displayNumber)
+    public func setScreensaverForDisplay(module: String, displayNumber: Int, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        try await screensaverManager.setScreensaverForDisplay(module: module, displayNumber: displayNumber, skipRestart: skipRestart, enableDebug: enableDebug)
     }
 
     /// Sets the screensaver for a specific space on a specific display.
@@ -184,8 +205,8 @@ public class PaperSaver {
     ///   that display, or `PaperSaverError.invalidConfiguration` for other issues.
     /// - Warning: Space numbers may change when spaces are added or removed.
     @available(macOS 14.0, *)
-    public func setScreensaverForDisplaySpace(module: String, displayNumber: Int, spaceNumber: Int) async throws {
-        try await screensaverManager.setScreensaverForDisplaySpace(module: module, displayNumber: displayNumber, spaceNumber: spaceNumber)
+    public func setScreensaverForDisplaySpace(module: String, displayNumber: Int, spaceNumber: Int, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        try await screensaverManager.setScreensaverForDisplaySpace(module: module, displayNumber: displayNumber, spaceNumber: spaceNumber, skipRestart: skipRestart, enableDebug: enableDebug)
     }
 
     // MARK: Idle Time Management

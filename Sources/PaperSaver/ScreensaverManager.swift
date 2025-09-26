@@ -6,11 +6,23 @@ import ColorSync
 @_silgen_name("CGSMainConnectionID")
 func CGSMainConnectionID() -> UInt32
 
-@_silgen_name("CGSCopyManagedDisplaySpaces") 
+@_silgen_name("CGSCopyManagedDisplaySpaces")
 func CGSCopyManagedDisplaySpaces(_ cid: UInt32) -> CFArray
 
+/// Represents different targeting options for screensaver configuration.
+public enum ScreensaverTarget {
+    /// Apply to all screens and spaces system-wide
+    case everywhere
+    /// Apply to a specific display by number
+    case display(Int)
+    /// Apply to a specific space by UUID
+    case space(String)
+    /// Apply to a specific space on a specific display
+    case displaySpace(display: Int, space: Int)
+}
+
 public protocol ScreensaverManaging {
-    func setScreensaver(module: String, screen: NSScreen?) async throws
+    func setScreensaver(module: String, screen: NSScreen?, skipRestart: Bool, enableDebug: Bool) async throws
     func getActiveScreensaver(for screen: NSScreen?) -> ScreensaverInfo?
     func getActiveScreensavers() -> [String]
     func setIdleTime(seconds: Int) throws
@@ -18,18 +30,18 @@ public protocol ScreensaverManaging {
     func listAvailableScreensavers() -> [ScreensaverModule]
     
     @available(macOS 14.0, *)
-    func setScreensaverForSpaceID(module: String, spaceID: Int, screen: NSScreen?) async throws
+    func setScreensaverForSpaceID(module: String, spaceID: Int, screen: NSScreen?, skipRestart: Bool, enableDebug: Bool) async throws
     
     @available(macOS 14.0, *)
-    func setScreensaverForSpace(module: String, spaceUUID: String, screen: NSScreen?) async throws
-    
-    func setScreensaverEverywhere(module: String) async throws
-    
+    func setScreensaverForSpace(module: String, spaceUUID: String, screen: NSScreen?, skipRestart: Bool, enableDebug: Bool) async throws
+
+    func setScreensaverEverywhere(module: String, skipRestart: Bool, enableDebug: Bool) async throws
+
     @available(macOS 14.0, *)
-    func setScreensaverForDisplay(module: String, displayNumber: Int) async throws
-    
+    func setScreensaverForDisplay(module: String, displayNumber: Int, skipRestart: Bool, enableDebug: Bool) async throws
+
     @available(macOS 14.0, *)
-    func setScreensaverForDisplaySpace(module: String, displayNumber: Int, spaceNumber: Int) async throws
+    func setScreensaverForDisplaySpace(module: String, displayNumber: Int, spaceNumber: Int, skipRestart: Bool, enableDebug: Bool) async throws
 }
 
 @available(macOS 14.0, *)
@@ -52,15 +64,15 @@ public class ScreensaverManager: ScreensaverManaging {
     
     public init() {}
     
-    public func setScreensaver(module: String, screen: NSScreen?) async throws {
+    public func setScreensaver(module: String, screen: NSScreen?, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
         if #available(macOS 14.0, *) {
             // Sonoma+: Set screensaver appropriately based on configuration
             if screen == nil {
                 // No specific screen - set everywhere
-                try await setScreensaverEverywhere(module: module)
+                try await setScreensaverEverywhere(module: module, skipRestart: skipRestart, enableDebug: enableDebug)
             } else {
                 // Specific screen requested - set for default/current space on that screen
-                try await setScreensaverForDefaultSpace(module: module, screen: screen)
+                try await setScreensaverForDefaultSpace(module: module, screen: screen, skipRestart: skipRestart, enableDebug: enableDebug)
             }
         } else {
             try setLegacyScreensaver(module: module)
@@ -501,34 +513,75 @@ public class ScreensaverManager: ScreensaverManaging {
         task.arguments = ["WallpaperAgent"]
         task.launch()
     }
-    
-    
+
+    // MARK: - Pure Plist Modification Functions
+
+    /// Modifies a plist to set screensaver configuration for a specific target
     @available(macOS 14.0, *)
-    public func setScreensaverForSpaceID(module: String, spaceID: Int, screen: NSScreen? = nil) async throws {
-        guard let spaceInfo = getSpaceByID(spaceID) else {
-            throw PaperSaverError.spaceNotFound
+    private func modifyPlistForTarget(
+        _ plist: [String: Any],
+        target: ScreensaverTarget,
+        configurationData: Data
+    ) throws -> [String: Any] {
+        var modifiedPlist = plist
+
+        switch target {
+        case .everywhere:
+            modifiedPlist = try modifyPlistForEverywhere(modifiedPlist, configurationData: configurationData)
+        case .display(let displayNumber):
+            modifiedPlist = try modifyPlistForDisplay(modifiedPlist, displayNumber: displayNumber, configurationData: configurationData)
+        case .space(let spaceUUID):
+            modifiedPlist = try modifyPlistForSpace(modifiedPlist, spaceUUID: spaceUUID, configurationData: configurationData)
+        case .displaySpace(let displayNumber, let spaceNumber):
+            guard let spaceUUID = getSpaceUUID(displayNumber: displayNumber, spaceNumber: spaceNumber) else {
+                throw PaperSaverError.spaceNotFoundOnDisplay(displayNumber: displayNumber, spaceNumber: spaceNumber)
+            }
+            modifiedPlist = try modifyPlistForSpace(modifiedPlist, spaceUUID: spaceUUID, configurationData: configurationData)
         }
-        
-        if spaceInfo.uuid.isEmpty {
-            try await setScreensaver(module: module, screen: screen)
-        } else {
-            try await setScreensaverForSpace(module: module, spaceUUID: spaceInfo.uuid, screen: screen)
-        }
+
+        return modifiedPlist
     }
-    
+
+    /// Modifies a plist to set screensaver everywhere
     @available(macOS 14.0, *)
-    private func setScreensaverForDefaultSpace(module: String, screen: NSScreen? = nil) async throws {
-        let indexPath = SystemPaths.wallpaperIndexPath
+    private func modifyPlistForEverywhere(
+        _ plist: [String: Any],
+        configurationData: Data
+    ) throws -> [String: Any] {
+        var modifiedPlist = plist
 
-        guard var plist = try? plistManager.read(at: indexPath) else {
-            throw PaperSaverError.plistReadError(indexPath)
+        // Check if we're in a single screen/space configuration
+        if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
+            // Multi-space configuration - set on all displays
+            let spaceTree = getNativeSpaceTree()
+            guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
+                // Fallback to setting default space
+                return try modifyPlistForDefaultSpace(modifiedPlist, configurationData: configurationData)
+            }
+
+            // Extract all display numbers and modify for each
+            let displayNumbers = monitors.compactMap { monitor in
+                monitor["display_number"] as? Int
+            }
+
+            for displayNumber in displayNumbers {
+                modifiedPlist = try modifyPlistForDisplay(modifiedPlist, displayNumber: displayNumber, configurationData: configurationData)
+            }
+        } else {
+            // Single screen/space configuration - use SystemDefault
+            modifiedPlist = try modifyPlistForDefaultSpace(modifiedPlist, configurationData: configurationData)
         }
 
-        guard let moduleURL = SystemPaths.screensaverModuleURL(for: module) else {
-            throw PaperSaverError.screensaverNotFound(module)
-        }
+        return modifiedPlist
+    }
 
-        let configurationData = try plistManager.createScreensaverConfiguration(moduleURL: moduleURL)
+    /// Modifies a plist to set screensaver for default space
+    @available(macOS 14.0, *)
+    private func modifyPlistForDefaultSpace(
+        _ plist: [String: Any],
+        configurationData: Data
+    ) throws -> [String: Any] {
+        var modifiedPlist = plist
 
         // Check if we should use SystemDefault or Spaces with empty UUID
         if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
@@ -554,47 +607,96 @@ public class ScreensaverManager: ScreensaverManaging {
             spaceConfig["Displays"] = spaceDisplays
 
             spacesDict[""] = spaceConfig
-            plist["Spaces"] = spacesDict
+            modifiedPlist["Spaces"] = spacesDict
         } else {
             // Use SystemDefault for single screen/space configuration
             var systemDefault = plist["SystemDefault"] as? [String: Any] ?? ["Type": "individual"]
             systemDefault["Idle"] = createIdleConfiguration(with: configurationData)
-            plist["SystemDefault"] = systemDefault
+            modifiedPlist["SystemDefault"] = systemDefault
 
             // Also update AllSpacesAndDisplays if it exists (it may take precedence)
             if var allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
                 allSpacesAndDisplays["Idle"] = createIdleConfiguration(with: configurationData)
-                plist["AllSpacesAndDisplays"] = allSpacesAndDisplays
+                modifiedPlist["AllSpacesAndDisplays"] = allSpacesAndDisplays
             }
         }
 
-        try plistManager.write(plist, to: indexPath)
-        restartWallpaperAgent()
+        return modifiedPlist
     }
 
+    /// Modifies a plist to set screensaver for a specific display
     @available(macOS 14.0, *)
-    public func setScreensaverForSpace(module: String, spaceUUID: String, screen: NSScreen? = nil) async throws {
+    private func modifyPlistForDisplay(
+        _ plist: [String: Any],
+        displayNumber: Int,
+        configurationData: Data
+    ) throws -> [String: Any] {
+        var modifiedPlist = plist
+        let spaceTree = getNativeSpaceTree()
+
+        guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
+            throw PaperSaverError.displayNotFound(displayNumber)
+        }
+
+        // Find the display by displayNumber
+        guard let monitor = monitors.first(where: {
+            ($0["display_number"] as? Int) == displayNumber
+        }),
+              let spaces = monitor["spaces"] as? [[String: Any]] else {
+            throw PaperSaverError.displayNotFound(displayNumber)
+        }
+
+        // Find the display UUID for the Displays section
+        guard let displayUUID = monitor["uuid"] as? String else {
+            throw PaperSaverError.displayNotFound(displayNumber)
+        }
+
+        // Handle all spaces (including empty UUID) using the Spaces section for consistency
+        var spacesConfig = modifiedPlist["Spaces"] as? [String: Any] ?? [:]
+
+        for space in spaces {
+            guard let uuid = space["uuid"] as? String else { continue }
+
+            // Set screensaver for this specific space (including empty UUID space)
+            var spaceConfig = spacesConfig[uuid] as? [String: Any] ?? [:]
+
+            // Write to BOTH Default and Displays sections for consistency
+            // Default section takes priority in reading, so write there first
+            var defaultConfig = spaceConfig["Default"] as? [String: Any] ?? ["Type": "individual"]
+            defaultConfig["Idle"] = createIdleConfiguration(with: configurationData)
+            spaceConfig["Default"] = defaultConfig
+
+            // Also write to Displays section for backward compatibility
+            var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
+            var spaceDisplayConfig = spaceDisplays[displayUUID] as? [String: Any] ?? ["Type": "individual"]
+            spaceDisplayConfig["Idle"] = createIdleConfiguration(with: configurationData)
+            spaceDisplays[displayUUID] = spaceDisplayConfig
+            spaceConfig["Displays"] = spaceDisplays
+
+            spacesConfig[uuid] = spaceConfig
+        }
+
+        modifiedPlist["Spaces"] = spacesConfig
+        return modifiedPlist
+    }
+
+    /// Modifies a plist to set screensaver for a specific space
+    @available(macOS 14.0, *)
+    private func modifyPlistForSpace(
+        _ plist: [String: Any],
+        spaceUUID: String,
+        configurationData: Data,
+        displayUUID: String? = nil
+    ) throws -> [String: Any] {
+        var modifiedPlist = plist
+
         // Handle empty UUID case - this means we're setting for the default/current space
         if spaceUUID.isEmpty {
-            // For empty UUID, we need to determine if we should use SystemDefault or Spaces
-            try await setScreensaverForDefaultSpace(module: module, screen: screen)
-            return
+            return try modifyPlistForDefaultSpace(modifiedPlist, configurationData: configurationData)
         }
-
-        let indexPath = SystemPaths.wallpaperIndexPath
-
-        guard var plist = try? plistManager.read(at: indexPath) else {
-            throw PaperSaverError.plistReadError(indexPath)
-        }
-
-        guard let moduleURL = SystemPaths.screensaverModuleURL(for: module) else {
-            throw PaperSaverError.screensaverNotFound(module)
-        }
-
-        let configurationData = try plistManager.createScreensaverConfiguration(moduleURL: moduleURL)
 
         // Get or create Spaces section
-        var spaces = plist["Spaces"] as? [String: Any] ?? [:]
+        var spaces = modifiedPlist["Spaces"] as? [String: Any] ?? [:]
 
         // Get or create the specific space
         var spaceConfig = spaces[spaceUUID] as? [String: Any] ?? [:]
@@ -607,14 +709,12 @@ public class ScreensaverManager: ScreensaverManaging {
 
         // Get or create Displays section for this space (for backward compatibility)
         var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
-        
-        if let screen = screen,
-           let screenID = ScreenIdentifier(from: screen) {
-            // Set screensaver for specific screen
-            let displayKey = screenID.displayID.description
-            var displayConfig = spaceDisplays[displayKey] as? [String: Any] ?? ["Type": "individual"]
+
+        if let displayUUID = displayUUID {
+            // Set screensaver for specific display
+            var displayConfig = spaceDisplays[displayUUID] as? [String: Any] ?? ["Type": "individual"]
             displayConfig["Idle"] = createIdleConfiguration(with: configurationData)
-            spaceDisplays[displayKey] = displayConfig
+            spaceDisplays[displayUUID] = displayConfig
         } else {
             // Set screensaver for all displays already configured in this specific space
             // Don't add displays from other spaces - only update existing ones
@@ -641,135 +741,333 @@ public class ScreensaverManager: ScreensaverManaging {
                 }
             }
         }
-        
+
         // Update the space configuration
         spaceConfig["Displays"] = spaceDisplays
         spaces[spaceUUID] = spaceConfig
-        plist["Spaces"] = spaces
-        
-        try plistManager.write(plist, to: indexPath)
-        restartWallpaperAgent()
+        modifiedPlist["Spaces"] = spaces
+
+        return modifiedPlist
     }
-    
-    
-    public func setScreensaverEverywhere(module: String) async throws {
-        if #available(macOS 14.0, *) {
-            // Check if we're in a single screen/space configuration
-            let indexPath = SystemPaths.wallpaperIndexPath
-            guard let plist = try? plistManager.read(at: indexPath) else {
-                throw PaperSaverError.plistReadError(indexPath)
+
+    // MARK: - Semantic Verification
+
+    /// Verifies that a screensaver configuration was successfully applied for a given target
+    /// This uses semantic verification (actual functionality) rather than file checksums
+    @available(macOS 14.0, *)
+    private func verifyScreensaverConfiguration(
+        expectedModule: String,
+        target: ScreensaverTarget
+    ) async throws -> Bool {
+        switch target {
+        case .everywhere:
+            return verifyScreensaverEverywhere(expectedModule: expectedModule)
+        case .display(let displayNumber):
+            return verifyScreensaverForDisplay(expectedModule: expectedModule, displayNumber: displayNumber)
+        case .space(let spaceUUID):
+            return verifyScreensaverForSpace(expectedModule: expectedModule, spaceUUID: spaceUUID)
+        case .displaySpace(let displayNumber, let spaceNumber):
+            guard let spaceUUID = getSpaceUUID(displayNumber: displayNumber, spaceNumber: spaceNumber) else {
+                return false
             }
-
-            // Check if we should use SystemDefault
-            if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
-                // Multi-space configuration - use the existing logic
-                let spaceTree = getNativeSpaceTree()
-
-                guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
-                    // Fallback to setting default space
-                    try await setScreensaverForDefaultSpace(module: module, screen: nil)
-                    return
-                }
-
-                // Extract all display numbers
-                let displayNumbers = monitors.compactMap { monitor in
-                    monitor["display_number"] as? Int
-                }
-
-                guard !displayNumbers.isEmpty else {
-                    throw PaperSaverError.screensaverNotFound(module)
-                }
-
-                // Set screensaver on each display
-                for displayNumber in displayNumbers {
-                    try await setScreensaverForDisplay(module: module, displayNumber: displayNumber)
-                }
-            } else {
-                // Single screen/space configuration - use SystemDefault
-                try await setScreensaverForDefaultSpace(module: module, screen: nil)
-            }
-        } else {
-            // Pre-Sonoma: Use legacy method to set on all screens
-            try await setScreensaver(module: module, screen: nil)
+            return verifyScreensaverForSpace(expectedModule: expectedModule, spaceUUID: spaceUUID)
         }
     }
-    
+
+    /// Verifies screensaver is set everywhere by checking if it appears in active screensavers
     @available(macOS 14.0, *)
-    public func setScreensaverForDisplay(module: String, displayNumber: Int) async throws {
+    private func verifyScreensaverEverywhere(expectedModule: String) -> Bool {
+        let activeScreensavers = getActiveScreensavers()
+        return activeScreensavers.contains(expectedModule)
+    }
+
+    /// Verifies screensaver is set for a specific display
+    @available(macOS 14.0, *)
+    private func verifyScreensaverForDisplay(expectedModule: String, displayNumber: Int) -> Bool {
+        let spaceTree = getNativeSpaceTree()
+        guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
+            return false
+        }
+
+        // Find the display by displayNumber
+        guard let monitor = monitors.first(where: {
+            ($0["display_number"] as? Int) == displayNumber
+        }),
+              let spaces = monitor["spaces"] as? [[String: Any]] else {
+            return false
+        }
+
+        // Check if any space on this display has the expected screensaver
+        for space in spaces {
+            guard let spaceUUID = space["uuid"] as? String else { continue }
+            if let screensaverName = getScreensaverForSpaceUUID(spaceUUID),
+               screensaverName == expectedModule {
+                return true
+            }
+        }
+
+        return false
+    }
+
+    /// Verifies screensaver is set for a specific space
+    @available(macOS 14.0, *)
+    private func verifyScreensaverForSpace(expectedModule: String, spaceUUID: String) -> Bool {
+        guard let screensaverName = getScreensaverForSpaceUUID(spaceUUID) else {
+            return false
+        }
+        return screensaverName == expectedModule
+    }
+
+    // MARK: - Unified Configuration Application
+
+    /// Unified function to apply screensaver configuration for any target
+    /// This performs: read once -> modify -> write once -> auto-rollback check
+    @available(macOS 14.0, *)
+    private func applyScreensaverConfiguration(
+        module: String,
+        target: ScreensaverTarget,
+        skipRestart: Bool = false,
+        enableDebug: Bool = false
+    ) async throws {
         let indexPath = SystemPaths.wallpaperIndexPath
-        
+
+        // 1. Read plist once
         guard var plist = try? plistManager.read(at: indexPath) else {
             throw PaperSaverError.plistReadError(indexPath)
         }
-        
+
+        // 2. Get screensaver module URL and create configuration data
         guard let moduleURL = SystemPaths.screensaverModuleURL(for: module) else {
             throw PaperSaverError.screensaverNotFound(module)
         }
-        
+
         let configurationData = try plistManager.createScreensaverConfiguration(moduleURL: moduleURL)
-        let spaceTree = getNativeSpaceTree()
-        
-        guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
-            throw PaperSaverError.displayNotFound(displayNumber)
-        }
-        
-        // Find the display by displayNumber
-        guard let monitor = monitors.first(where: { 
-            ($0["display_number"] as? Int) == displayNumber 
-        }),
-              let spaces = monitor["spaces"] as? [[String: Any]] else {
-            throw PaperSaverError.displayNotFound(displayNumber)
-        }
-        
-        // Find the display UUID for the Displays section
-        guard let displayUUID = monitor["uuid"] as? String else {
-            throw PaperSaverError.displayNotFound(displayNumber)
-        }
-        
-        // Handle all spaces (including empty UUID) using the Spaces section for consistency
-        var spacesConfig = plist["Spaces"] as? [String: Any] ?? [:]
-        var spacesProcessed = 0
-        
-        for space in spaces {
-            guard let uuid = space["uuid"] as? String else { continue }
 
-            // Set screensaver for this specific space (including empty UUID space)
-            var spaceConfig = spacesConfig[uuid] as? [String: Any] ?? [:]
+        // 3. Apply all modifications using pure functions
+        plist = try modifyPlistForTarget(plist, target: target, configurationData: configurationData)
 
-            // Write to BOTH Default and Displays sections for consistency
-            // Default section takes priority in reading, so write there first
-            var defaultConfig = spaceConfig["Default"] as? [String: Any] ?? ["Type": "individual"]
-            defaultConfig["Idle"] = createIdleConfiguration(with: configurationData)
-            spaceConfig["Default"] = defaultConfig
+        // 4. Write once with semantic auto-rollback verification
+        try await writeWithAutoRollback(
+            plist,
+            to: indexPath,
+            restartAgent: !skipRestart,
+            enableDebug: enableDebug,
+            expectedModule: module,
+            target: target
+        )
+    }
 
-            // Also write to Displays section for backward compatibility
-            var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
-            var spaceDisplayConfig = spaceDisplays[displayUUID] as? [String: Any] ?? ["Type": "individual"]
-            spaceDisplayConfig["Idle"] = createIdleConfiguration(with: configurationData)
-            spaceDisplays[displayUUID] = spaceDisplayConfig
-            spaceConfig["Displays"] = spaceDisplays
-
-            spacesConfig[uuid] = spaceConfig
-            spacesProcessed += 1
+    @available(macOS 14.0, *)
+    private func writeWithAutoRollback(
+        _ plist: [String: Any],
+        to path: String,
+        restartAgent: Bool = true,
+        waitSeconds: Double = 3.0,
+        enableDebug: Bool = false,
+        expectedModule: String? = nil,
+        target: ScreensaverTarget? = nil
+    ) async throws {
+        if enableDebug {
+            print("🔧 DEBUG: Starting writeWithAutoRollback")
+            print("🔧 DEBUG: Target path: \(path)")
+            print("🔧 DEBUG: Restart agent: \(restartAgent)")
         }
-        
-        guard spacesProcessed > 0 else {
-            throw PaperSaverError.displayNotFound(displayNumber)
+
+        // 1. Calculate PRE-write checksum for comparison
+        let preWriteChecksum = try? plistManager.calculateChecksum(at: path)
+        if enableDebug {
+            print("🔧 DEBUG: Pre-write checksum: \(preWriteChecksum ?? "N/A")")
         }
-        
-        plist["Spaces"] = spacesConfig
-        
-        try plistManager.write(plist, to: indexPath)
-        restartWallpaperAgent()
+
+        // 2. Write plist (backup automatically created)
+        try plistManager.write(plist, to: path)
+
+        // 3. Calculate post-write checksum
+        let expectedChecksum = try plistManager.calculateChecksum(at: path)
+        if enableDebug {
+            print("🔧 DEBUG: Post-write checksum: \(expectedChecksum)")
+            let fileSize = try? FileManager.default.attributesOfItem(atPath: path)[.size]
+            print("🔧 DEBUG: File size after write: \(fileSize ?? "unknown")")
+        }
+
+        // 4. Restart agent if requested
+        if restartAgent {
+            if enableDebug {
+                print("🔧 DEBUG: Restarting WallpaperAgent...")
+            }
+            restartWallpaperAgent()
+
+            // 5. Wait for system to settle
+            if enableDebug {
+                print("🔧 DEBUG: Waiting \(waitSeconds) seconds for system to settle...")
+            }
+            try await Task.sleep(nanoseconds: UInt64(waitSeconds * 1_000_000_000))
+
+            // 6. Verify configuration semantically (if verification parameters provided)
+            if let expectedModule = expectedModule, let target = target {
+                do {
+                    let verificationResult = try await verifyScreensaverConfiguration(
+                        expectedModule: expectedModule,
+                        target: target
+                    )
+
+                    if enableDebug {
+                        print("🔧 DEBUG: Semantic verification result: \(verificationResult ? "SUCCESS" : "FAILED")")
+                        print("🔧 DEBUG: Expected module: \(expectedModule)")
+                        print("🔧 DEBUG: Target: \(target)")
+                    }
+
+                    // 7. Auto-rollback if semantic verification failed
+                    if !verificationResult {
+                        print("⚠️ Semantic verification failed - screensaver configuration did not apply correctly")
+                        if enableDebug {
+                            print("🔧 DEBUG: Expected module '\(expectedModule)' not found for target \(target)")
+                        }
+                        print("🔧 Auto-rolling back...")
+                        try plistManager.restore(backupAt: path + ".backup", to: path)
+                        print("✅ Auto-rollback completed successfully")
+                    } else if enableDebug {
+                        print("🔧 DEBUG: Semantic verification passed - screensaver correctly applied")
+                    }
+                } catch {
+                    print("⚠️ Unable to verify screensaver configuration after WallpaperAgent restart")
+                    if enableDebug {
+                        print("🔧 DEBUG: Verification error: \(error)")
+                    }
+                    print("🔧 Auto-rolling back...")
+                    try plistManager.restore(backupAt: path + ".backup", to: path)
+                    print("✅ Auto-rollback completed successfully")
+                }
+            } else if enableDebug {
+                print("🔧 DEBUG: No verification parameters provided - skipping semantic verification")
+
+                // Still show file changes for debugging purposes
+                do {
+                    let actualChecksum = try plistManager.calculateChecksum(at: path)
+                    let fileSize = try? FileManager.default.attributesOfItem(atPath: path)[.size]
+                    print("🔧 DEBUG: Post-restart checksum: \(actualChecksum)")
+                    print("🔧 DEBUG: File size after restart: \(fileSize ?? "unknown")")
+                    print("🔧 DEBUG: Checksums match: \(expectedChecksum == actualChecksum)")
+                } catch {
+                    print("🔧 DEBUG: Could not read post-restart file info: \(error)")
+                }
+            }
+        }
+
+        if enableDebug {
+            print("🔧 DEBUG: writeWithAutoRollback completed")
+        }
+    }
+
+
+    @available(macOS 14.0, *)
+    public func setScreensaverForSpaceID(module: String, spaceID: Int, screen: NSScreen? = nil, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        guard let spaceInfo = getSpaceByID(spaceID) else {
+            throw PaperSaverError.spaceNotFound
+        }
+
+        if spaceInfo.uuid.isEmpty {
+            try await setScreensaver(module: module, screen: screen, skipRestart: skipRestart, enableDebug: enableDebug)
+        } else {
+            try await setScreensaverForSpace(module: module, spaceUUID: spaceInfo.uuid, screen: screen, skipRestart: skipRestart, enableDebug: enableDebug)
+        }
     }
     
     @available(macOS 14.0, *)
-    public func setScreensaverForDisplaySpace(module: String, displayNumber: Int, spaceNumber: Int) async throws {
-        guard let uuid = getSpaceUUID(displayNumber: displayNumber, spaceNumber: spaceNumber) else {
-            throw PaperSaverError.spaceNotFoundOnDisplay(displayNumber: displayNumber, spaceNumber: spaceNumber)
+    private func setScreensaverForDefaultSpace(module: String, screen: NSScreen? = nil, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        // For default space, we use empty space UUID
+        let displayUUID = screen != nil ? getDisplayUUID(for: screen!) : nil
+
+        // Use the pure function approach by modifying the existing one to handle displayUUID
+        let indexPath = SystemPaths.wallpaperIndexPath
+        guard var plist = try? plistManager.read(at: indexPath) else {
+            throw PaperSaverError.plistReadError(indexPath)
         }
-        
-        try await setScreensaverForSpace(module: module, spaceUUID: uuid, screen: nil)
+
+        guard let moduleURL = SystemPaths.screensaverModuleURL(for: module) else {
+            throw PaperSaverError.screensaverNotFound(module)
+        }
+
+        let configurationData = try plistManager.createScreensaverConfiguration(moduleURL: moduleURL)
+        plist = try modifyPlistForSpace(plist, spaceUUID: "", configurationData: configurationData, displayUUID: displayUUID)
+
+        try await writeWithAutoRollback(
+            plist,
+            to: indexPath,
+            restartAgent: !skipRestart,
+            enableDebug: enableDebug,
+            expectedModule: module,
+            target: .space("")
+        )
+    }
+
+    @available(macOS 14.0, *)
+    public func setScreensaverForSpace(module: String, spaceUUID: String, screen: NSScreen? = nil, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        // Handle empty UUID case - this means we're setting for the default/current space
+        if spaceUUID.isEmpty {
+            try await setScreensaverForDefaultSpace(module: module, screen: screen, skipRestart: skipRestart, enableDebug: enableDebug)
+            return
+        }
+
+        // Get displayUUID if screen is specified
+        let displayUUID = screen != nil ? getDisplayUUID(for: screen!) : nil
+
+        // Use the unified approach
+        let indexPath = SystemPaths.wallpaperIndexPath
+        guard var plist = try? plistManager.read(at: indexPath) else {
+            throw PaperSaverError.plistReadError(indexPath)
+        }
+
+        guard let moduleURL = SystemPaths.screensaverModuleURL(for: module) else {
+            throw PaperSaverError.screensaverNotFound(module)
+        }
+
+        let configurationData = try plistManager.createScreensaverConfiguration(moduleURL: moduleURL)
+        plist = try modifyPlistForSpace(plist, spaceUUID: spaceUUID, configurationData: configurationData, displayUUID: displayUUID)
+
+        try await writeWithAutoRollback(
+            plist,
+            to: indexPath,
+            restartAgent: !skipRestart,
+            enableDebug: enableDebug,
+            expectedModule: module,
+            target: .space(spaceUUID)
+        )
+    }
+
+
+    public func setScreensaverEverywhere(module: String, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        if #available(macOS 14.0, *) {
+            try await applyScreensaverConfiguration(
+                module: module,
+                target: .everywhere,
+                skipRestart: skipRestart,
+                enableDebug: enableDebug
+            )
+        } else {
+            // Pre-Sonoma: Use legacy method to set on all screens
+            try await setScreensaver(module: module, screen: nil, skipRestart: skipRestart, enableDebug: enableDebug)
+        }
+    }
+    
+    @available(macOS 14.0, *)
+    public func setScreensaverForDisplay(module: String, displayNumber: Int, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        try await applyScreensaverConfiguration(
+            module: module,
+            target: .display(displayNumber),
+            skipRestart: skipRestart,
+            enableDebug: enableDebug
+        )
+    }
+
+    @available(macOS 14.0, *)
+    public func setScreensaverForDisplaySpace(module: String, displayNumber: Int, spaceNumber: Int, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
+        try await applyScreensaverConfiguration(
+            module: module,
+            target: .displaySpace(display: displayNumber, space: spaceNumber),
+            skipRestart: skipRestart,
+            enableDebug: enableDebug
+        )
     }
 }
 

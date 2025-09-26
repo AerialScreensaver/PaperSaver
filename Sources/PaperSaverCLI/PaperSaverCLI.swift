@@ -214,13 +214,17 @@ struct PaperSaverCLI {
             }
         }
         
-        try await paperSaver.setScreensaver(module: name, for: screen)
-        
-        print("✅ Successfully set screensaver to: \(name)")
-        
-        if verbose {
-            print("\nNote: You may need to restart the wallpaper agent for changes to take effect:")
-            print("  killall WallpaperAgent")
+        do {
+            try await paperSaver.setScreensaver(module: name, for: screen)
+
+            print("✅ Successfully set screensaver to: \(name)")
+
+            if verbose {
+                print("\nNote: You may need to restart the wallpaper agent for changes to take effect:")
+                print("  killall WallpaperAgent")
+            }
+        } catch {
+            throw error
         }
     }
     
@@ -1357,19 +1361,33 @@ extension PaperSaverCLI {
         
         if options.isEverywhere {
             let verbose = args.contains("--verbose") || args.contains("-v")
+            let noRestart = args.contains("--no-restart")
+            let debugRollback = args.contains("--debug-rollback")
 
             if verbose {
                 print("Setting screensaver to '\(screensaverName)'...")
                 print("Target: All screens and spaces")
+                if noRestart {
+                    print("Using --no-restart: skipping WallpaperAgent restart and auto-rollback")
+                }
+                if debugRollback {
+                    print("Debug mode enabled: detailed rollback logging active")
+                }
             }
 
-            try await paperSaver.setScreensaverEverywhere(module: screensaverName)
+            do {
+                try await paperSaver.setScreensaverEverywhere(module: screensaverName, skipRestart: noRestart, enableDebug: debugRollback)
 
-            print("✅ Successfully set screensaver to: \(screensaverName)")
+                print("✅ Successfully set screensaver to: \(screensaverName)")
 
-            if verbose {
-                print("\nNote: You may need to restart the wallpaper agent for changes to take effect:")
-                print("  killall WallpaperAgent")
+                if verbose && !noRestart && !debugRollback {
+                    print("\nAuto-rollback protection is active - will revert if WallpaperAgent corrupts settings")
+                } else if verbose && noRestart {
+                    print("\nNote: You may need to restart the wallpaper agent manually for changes to take effect:")
+                    print("  killall WallpaperAgent")
+                }
+            } catch {
+                throw error
             }
         } else if options.hasDisplayTarget && options.hasSpaceTarget {
             if #available(macOS 14.0, *) {
@@ -1421,18 +1439,26 @@ extension PaperSaverCLI {
         let wallpaperOptions = WallpaperOptions()
         
         if options.isEverywhere {
-            try await paperSaver.setWallpaperEverywhere(imageURL: imageURL, options: wallpaperOptions)
-            print("✅ Successfully set wallpaper everywhere")
+            do {
+                try await paperSaver.setWallpaperEverywhere(imageURL: imageURL, options: wallpaperOptions)
+                print("✅ Successfully set wallpaper everywhere")
+            } catch {
+                throw error
+            }
         } else if options.hasDisplayTarget && options.hasSpaceTarget {
             if #available(macOS 14.0, *) {
                 if let displayNumber = options.displayNumber, let spaceNumber = options.spaceNumber {
-                    try await paperSaver.setWallpaperForDisplaySpace(
-                        imageURL: imageURL,
-                        displayNumber: displayNumber,
-                        spaceNumber: spaceNumber,
-                        options: wallpaperOptions
-                    )
-                    print("✅ Successfully set wallpaper for display \(displayNumber) space \(spaceNumber)")
+                    do {
+                        try await paperSaver.setWallpaperForDisplaySpace(
+                            imageURL: imageURL,
+                            displayNumber: displayNumber,
+                            spaceNumber: spaceNumber,
+                            options: wallpaperOptions
+                        )
+                        print("✅ Successfully set wallpaper for display \(displayNumber) space \(spaceNumber)")
+                    } catch {
+                        throw error
+                    }
                 } else {
                     throw PaperSaverError.invalidConfiguration("Invalid display/space combination")
                 }
@@ -1443,12 +1469,16 @@ extension PaperSaverCLI {
         } else if options.hasDisplayTarget {
             if #available(macOS 14.0, *) {
                 if let displayNumber = options.displayNumber {
-                    try await paperSaver.setWallpaperForDisplay(
-                        imageURL: imageURL,
-                        displayNumber: displayNumber,
-                        options: wallpaperOptions
-                    )
-                    print("✅ Successfully set wallpaper for display \(displayNumber)")
+                    do {
+                        try await paperSaver.setWallpaperForDisplay(
+                            imageURL: imageURL,
+                            displayNumber: displayNumber,
+                            options: wallpaperOptions
+                        )
+                        print("✅ Successfully set wallpaper for display \(displayNumber)")
+                    } catch {
+                        throw error
+                    }
                 } else {
                     throw PaperSaverError.invalidConfiguration("Invalid display number")
                 }
@@ -1459,13 +1489,17 @@ extension PaperSaverCLI {
         } else if options.hasSpaceTarget {
             if #available(macOS 14.0, *) {
                 if let spaceUUID = options.spaceUUID {
-                    try await paperSaver.setWallpaperForSpace(
-                        imageURL: imageURL,
-                        spaceUUID: spaceUUID,
-                        screen: nil,
-                        options: wallpaperOptions
-                    )
-                    print("✅ Successfully set wallpaper for space \(spaceUUID)")
+                    do {
+                        try await paperSaver.setWallpaperForSpace(
+                            imageURL: imageURL,
+                            spaceUUID: spaceUUID,
+                            screen: nil,
+                            options: wallpaperOptions
+                        )
+                        print("✅ Successfully set wallpaper for space \(spaceUUID)")
+                    } catch {
+                        throw error
+                    }
                 } else {
                     throw PaperSaverError.invalidConfiguration("Invalid space identifier")
                 }
@@ -1474,8 +1508,12 @@ extension PaperSaverCLI {
                 exit(1)
             }
         } else {
-            try await paperSaver.setWallpaperEverywhere(imageURL: imageURL, options: wallpaperOptions)
-            print("✅ Successfully set wallpaper")
+            do {
+                try await paperSaver.setWallpaperEverywhere(imageURL: imageURL, options: wallpaperOptions)
+                print("✅ Successfully set wallpaper")
+            } catch {
+                throw error
+            }
         }
     }
 }

@@ -1,4 +1,5 @@
 import Foundation
+import CryptoKit
 
 public final class PlistManager: @unchecked Sendable {
     public static let shared = PlistManager()
@@ -115,7 +116,19 @@ public final class PlistManager: @unchecked Sendable {
         
         try FileManager.default.copyItem(at: backupURL, to: originalURL)
     }
-    
+
+    public func calculateChecksum(at path: String) throws -> String {
+        let url = URL(fileURLWithPath: path)
+
+        guard FileManager.default.fileExists(atPath: path) else {
+            throw PaperSaverError.fileNotFound(url)
+        }
+
+        let data = try Data(contentsOf: url)
+        let hash = SHA256.hash(data: data)
+        return hash.compactMap { String(format: "%02x", $0) }.joined()
+    }
+
     public func createScreensaverConfiguration(moduleURL: URL) throws -> Data {
         // Determine screensaver type from URL extension
         let `extension` = moduleURL.pathExtension.lowercased()
