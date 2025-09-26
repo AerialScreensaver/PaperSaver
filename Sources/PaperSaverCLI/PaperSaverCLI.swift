@@ -36,7 +36,7 @@ struct PaperSaverCLI {
         
         let commandString = args[0]
         
-        if commandString == "--version" || commandString == "-v" {
+        if commandString == "--version" {
             print("papersaver version \(version)")
             exit(0)
         }
@@ -131,6 +131,7 @@ struct PaperSaverCLI {
     
     static func listScreensavers(_ paperSaver: PaperSaver, args: [String]) throws {
         let format = getOutputFormat(from: args)
+        let verbose = args.contains("--verbose") || args.contains("-v")
         let screensavers = paperSaver.listAvailableScreensavers()
         
         switch format {
@@ -154,6 +155,9 @@ struct PaperSaverCLI {
                 print("\nSystem Screensavers:")
                 for saver in systemScreensavers {
                     print("  • \(saver.name) (\(saver.type.displayName))")
+                    if verbose {
+                        print("    Path: \(saver.path.path)")
+                    }
                 }
             }
             
@@ -161,6 +165,9 @@ struct PaperSaverCLI {
                 print("\nUser Screensavers:")
                 for saver in userScreensavers {
                     print("  • \(saver.name) (\(saver.type.displayName))")
+                    if verbose {
+                        print("    Path: \(saver.path.path)")
+                    }
                 }
             }
             
@@ -1230,7 +1237,7 @@ struct PaperSaverCLI {
             get-space               Get current active space
             
             help, --help, -h        Show this help message
-            version, --version, -v  Show version information
+            version, --version      Show version information
         
         TARGETING OPTIONS (for set-saver and set-paper):
             --display <number>      Target specific display by number (1, 2, 3...)
