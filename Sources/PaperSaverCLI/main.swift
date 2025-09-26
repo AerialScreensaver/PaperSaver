@@ -426,7 +426,7 @@ struct PaperSaverCLI {
             print("DEBUG: Checking for Default section for space UUID '\(spaceUUID)'")
             if let defaultConfig = config["Default"] as? [String: Any] {
                 print("DEBUG: Found Default config")
-                if let idle = defaultConfig["Idle"] as? [String: Any] {
+                if defaultConfig["Idle"] is [String: Any] {
                     print("DEBUG: Found Idle in Default")
                 }
             }

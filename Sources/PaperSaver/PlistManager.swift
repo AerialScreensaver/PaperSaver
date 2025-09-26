@@ -281,11 +281,51 @@ public final class PlistManager: @unchecked Sendable {
     }
 }
 
+/// The display style for wallpaper images.
+///
+/// Specifies how a wallpaper image should be scaled, positioned, and
+/// displayed on the screen. Each style affects how the image fills
+/// or fits within the available screen space.
 public enum WallpaperStyle: String, Sendable {
+    /// Scale the image to fill the entire screen, cropping if necessary.
+    ///
+    /// The image is scaled to completely fill the screen while maintaining
+    /// its aspect ratio. Parts of the image may be cropped if the aspect
+    /// ratios don't match. This is the most common wallpaper style.
     case fill = "fill"
+
+    /// Scale the image to fit entirely within the screen.
+    ///
+    /// The image is scaled to fit completely within the screen boundaries
+    /// while maintaining its aspect ratio. Black bars may appear if the
+    /// aspect ratios don't match. No part of the image is cropped.
     case fit = "fit"
+
+    /// Stretch the image to exactly match the screen dimensions.
+    ///
+    /// The image is scaled to exactly fill the screen, potentially
+    /// distorting the aspect ratio. The entire image is visible but
+    /// may appear stretched or squashed.
     case stretch = "stretch"
+
+    /// Display the image at its natural size, centered on the screen.
+    ///
+    /// The image is displayed at its original size without scaling,
+    /// positioned in the center of the screen. If the image is smaller
+    /// than the screen, the background color shows around it.
     case center = "center"
+
+    /// Tile the image to fill the screen by repeating it.
+    ///
+    /// The image is repeated in a grid pattern to fill the entire
+    /// screen. Useful for seamless textures and patterns. The image
+    /// is displayed at its original size.
     case tile = "tile"
+
+    /// Use dynamic wallpaper features (time-based or adaptive).
+    ///
+    /// For dynamic wallpapers that change based on time of day or
+    /// system appearance. The exact behavior depends on the specific
+    /// wallpaper and system settings.
     case dynamic = "dynamic"
 }
