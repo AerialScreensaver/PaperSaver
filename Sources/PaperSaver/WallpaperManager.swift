@@ -22,7 +22,6 @@ public protocol WallpaperManaging {
 
 public class WallpaperManager: WallpaperManaging {
     private let plistManager = PlistManager.shared
-    private let configManager = ConfigurationManager()
     private let screensaverManager = ScreensaverManager()
     
     public init() {}
@@ -245,7 +244,7 @@ public class WallpaperManager: WallpaperManaging {
         plist["Spaces"] = spaces
         
         try plistManager.write(plist, to: indexPath)
-        configManager.restartWallpaperAgent()
+        restartWallpaperAgent()
     }
     
     public func setWallpaperEverywhere(imageURL: URL, options: WallpaperOptions = .default) async throws {
@@ -342,7 +341,7 @@ public class WallpaperManager: WallpaperManaging {
         }
         
         try plistManager.write(plist, to: indexPath)
-        configManager.restartWallpaperAgent()
+        restartWallpaperAgent()
     }
     
     @available(macOS 14.0, *)
@@ -403,5 +402,12 @@ public class WallpaperManager: WallpaperManaging {
         }
         
         return nil
+    }
+
+    private func restartWallpaperAgent() {
+        let task = Process()
+        task.launchPath = "/usr/bin/killall"
+        task.arguments = ["WallpaperAgent"]
+        task.launch()
     }
 }

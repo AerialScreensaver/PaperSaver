@@ -19,32 +19,6 @@ struct PaperSaverCLI {
         case version
         case help
         
-        var description: String {
-            switch self {
-            case .list:
-                return "List all available screensavers"
-            case .get:
-                return "Get current screensaver"
-            case .idleTime:
-                return "Get or set idle time"
-            case .listSpaces:
-                return "List all spaces (Sonoma+)"
-            case .listDisplays:
-                return "List all displays with UUID mapping (Sonoma+)"
-            case .getSpace:
-                return "Get current active space (Sonoma+)"
-            case .setSaver:
-                return "Set screensaver with unified targeting options"
-            case .setPaper:
-                return "Set wallpaper with unified targeting options"
-            case .restoreBackup:
-                return "Restore wallpaper/screensaver settings from backup"
-            case .version:
-                return "Show version information"
-            case .help:
-                return "Show this help message"
-            }
-        }
     }
     
     enum OutputFormat: String {
@@ -285,59 +259,6 @@ struct PaperSaverCLI {
         }
     }
     
-    static func handleWallpaper(_ paperSaver: PaperSaver, args: [String]) async throws {
-        guard !args.isEmpty else {
-            print("Wallpaper commands:")
-            print("  get              Get current wallpaper")
-            print("  set <path>       Set wallpaper from file path")
-            print("  list-options     List wallpaper scaling options")
-            return
-        }
-        
-        let subcommand = args[0]
-        
-        switch subcommand {
-        case "get":
-            if let screen = NSScreen.main,
-               let url = paperSaver.getCurrentWallpaper(for: screen) {
-                print("Current wallpaper: \(url.imagePath)")
-            } else {
-                print("No wallpaper currently set")
-            }
-            
-        case "set":
-            guard args.count >= 2 else {
-                printError("Error: Wallpaper path required")
-                print("Usage: papersaver wallpaper set <path> [--screen <screen-id>] [--scaling <option>]")
-                exit(1)
-            }
-            
-            let path = args[1]
-            let url = URL(fileURLWithPath: path.expandingTildeInPath)
-            
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                printError("Error: File not found at path: \(path)")
-                exit(1)
-            }
-            
-            let screen = getScreen(from: args)
-            let options = WallpaperOptions()
-            
-            try await paperSaver.setWallpaper(imageURL: url, screen: screen, options: options)
-            print("✅ Successfully set wallpaper")
-            
-        case "list-options":
-            print("Wallpaper Scaling Options:")
-            print("  • fill      - Fill screen, cropping if necessary")
-            print("  • fit       - Fit entire image on screen")
-            print("  • stretch   - Stretch to fill screen")
-            print("  • center    - Center image without scaling")
-            print("  • tile      - Tile image across screen")
-            
-        default:
-            printError("Error: Unknown wallpaper subcommand '\(subcommand)'")
-        }
-    }
     
     static func formatIdleTime(_ seconds: Int) -> String {
         if seconds == 0 {
@@ -754,7 +675,7 @@ struct PaperSaverCLI {
     }
     
     @available(macOS 14.0, *)
-    static func getWallpaperForSpace(_ paperSaver: PaperSaver, spaceUUID: String, debug: Bool = false) -> String? {
+    static func getWallpaperForSpace(spaceUUID: String, debug: Bool = false) -> String? {
         let plistManager = PlistManager.shared
         let indexPath = SystemPaths.wallpaperIndexPath
         
@@ -936,7 +857,7 @@ struct PaperSaverCLI {
                 print("  \(spaceColor)Space \(spaceNumber)\(reset): Desktop \(spaceNumber) \(uuidDisplay)\(currentMarker)")
                 
                 // Get wallpaper for this space
-                let wallpaperInfo = getWallpaperForSpace(paperSaver, spaceUUID: spaceUUID, debug: debug) ?? "None"
+                let wallpaperInfo = getWallpaperForSpace(spaceUUID: spaceUUID, debug: debug) ?? "None"
                 print("    └─ \(wallpaperColor)Wallpaper\(reset): \(wallpaperInfo)")
                 
                 // Get screensaver for this space
@@ -1362,11 +1283,6 @@ extension String {
     }
 }
 
-extension String {
-    var expandingTildeInPath: String {
-        return NSString(string: self).expandingTildeInPath
-    }
-}
 
 // MARK: - Unified Command Support
 extension PaperSaverCLI {
@@ -1433,7 +1349,21 @@ extension PaperSaverCLI {
         let options = parseTargetingOptions(from: args)
         
         if options.isEverywhere {
-            try await setScreensaver(paperSaver, name: screensaverName, args: [])
+            let verbose = args.contains("--verbose") || args.contains("-v")
+
+            if verbose {
+                print("Setting screensaver to '\(screensaverName)'...")
+                print("Target: All screens and spaces")
+            }
+
+            try await paperSaver.setScreensaverEverywhere(module: screensaverName)
+
+            print("✅ Successfully set screensaver to: \(screensaverName)")
+
+            if verbose {
+                print("\nNote: You may need to restart the wallpaper agent for changes to take effect:")
+                print("  killall WallpaperAgent")
+            }
         } else if options.hasDisplayTarget && options.hasSpaceTarget {
             if #available(macOS 14.0, *) {
                 if let displayNumber = options.displayNumber, let spaceNumber = options.spaceNumber {

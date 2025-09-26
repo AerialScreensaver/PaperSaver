@@ -6,20 +6,17 @@ public struct ScreensaverInfo: Codable, Equatable {
     public let identifier: String
     public let modulePath: String?
     public let screen: ScreenIdentifier?
-    public let configuration: [String: Any]?
     
     public init(
         name: String,
         identifier: String,
         modulePath: String? = nil,
-        screen: ScreenIdentifier? = nil,
-        configuration: [String: Any]? = nil
+        screen: ScreenIdentifier? = nil
     ) {
         self.name = name
         self.identifier = identifier
         self.modulePath = modulePath
         self.screen = screen
-        self.configuration = configuration
     }
     
     private enum CodingKeys: String, CodingKey {
@@ -35,7 +32,6 @@ public struct ScreensaverInfo: Codable, Equatable {
         identifier = try container.decode(String.self, forKey: .identifier)
         modulePath = try container.decodeIfPresent(String.self, forKey: .modulePath)
         screen = try container.decodeIfPresent(ScreenIdentifier.self, forKey: .screen)
-        configuration = nil
     }
     
     public func encode(to encoder: Encoder) throws {
@@ -56,18 +52,11 @@ public struct ScreensaverInfo: Codable, Equatable {
 
 public struct ScreenIdentifier: Codable, Equatable {
     public let displayID: CGDirectDisplayID
-    public let spaceID: Int?
-    
-    public init(displayID: CGDirectDisplayID, spaceID: Int? = nil) {
-        self.displayID = displayID
-        self.spaceID = spaceID
-    }
     
     public init?(from screen: NSScreen) {
         guard let displayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID else {
             return nil
         }
         self.displayID = displayID
-        self.spaceID = nil
     }
 }

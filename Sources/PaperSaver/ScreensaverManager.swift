@@ -33,7 +33,7 @@ public protocol ScreensaverManaging {
 }
 
 @available(macOS 14.0, *)
-public protocol SpaceManaging {
+internal protocol SpaceManaging {
     func listSpaces() -> [SpaceInfo]
     func getAllSpaces(includeHistorical: Bool) -> [SpaceInfo]
     func getActiveSpace() -> SpaceInfo?
@@ -502,77 +502,6 @@ public class ScreensaverManager: ScreensaverManaging {
         task.launch()
     }
     
-    // Debug helper to export dictionary structure as readable text
-    private func exportDictionaryDebug(_ dictionary: [String: Any], to filePath: String, title: String) {
-        var output = "\(title)\n"
-        output += String(repeating: "=", count: title.count) + "\n\n"
-        
-        func describeDictionary(_ dict: [String: Any], prefix: String = "", level: Int = 0) -> String {
-            var result = ""
-            let indent = String(repeating: "  ", count: level)
-            
-            for (key, value) in dict.sorted(by: { $0.key < $1.key }) {
-                let fullPath = prefix.isEmpty ? key : "\(prefix).\(key)"
-                
-                if let subDict = value as? [String: Any] {
-                    result += "\(indent)\(key): [Dictionary with \(subDict.count) keys]\n"
-                    result += describeDictionary(subDict, prefix: fullPath, level: level + 1)
-                } else if let array = value as? [Any] {
-                    result += "\(indent)\(key): [Array with \(array.count) items]\n"
-                    for (index, item) in array.enumerated() {
-                        if let itemDict = item as? [String: Any] {
-                            result += "\(indent)  [\(index)]: [Dictionary with \(itemDict.count) keys]\n"
-                            result += describeDictionary(itemDict, prefix: "\(fullPath)[\(index)]", level: level + 2)
-                        } else if let data = item as? Data {
-                            result += "\(indent)  [\(index)]: Data(\(data.count) bytes)\n"
-                        } else {
-                            result += "\(indent)  [\(index)]: \(type(of: item)) = \(item)\n"
-                        }
-                    }
-                } else if let data = value as? Data {
-                    result += "\(indent)\(key): Data(\(data.count) bytes)\n"
-                } else if let date = value as? Date {
-                    result += "\(indent)\(key): Date = \(date)\n"
-                } else if value is NSNull {
-                    result += "\(indent)\(key): NSNull\n"
-                } else {
-                    result += "\(indent)\(key): \(type(of: value)) = \(value)\n"
-                }
-            }
-            return result
-        }
-        
-        output += describeDictionary(dictionary)
-        
-        // Add summary statistics
-        output += "\n\nSUMMARY:\n"
-        output += "========\n"
-        output += "Top-level keys: \(dictionary.keys.count)\n"
-        
-        if let displays = dictionary["Displays"] as? [String: Any] {
-            output += "Displays section: \(displays.keys.count) display UUIDs\n"
-        }
-        
-        if let spaces = dictionary["Spaces"] as? [String: Any] {
-            output += "Spaces section: \(spaces.keys.count) space entries\n"
-            var totalSpaceDisplays = 0
-            for (spaceKey, spaceValue) in spaces {
-                if let spaceDict = spaceValue as? [String: Any],
-                   let spaceDisplays = spaceDict["Displays"] as? [String: Any] {
-                    totalSpaceDisplays += spaceDisplays.keys.count
-                    output += "  Space '\(spaceKey)': \(spaceDisplays.keys.count) displays\n"
-                }
-            }
-            output += "Total display configs in all spaces: \(totalSpaceDisplays)\n"
-        }
-        
-        do {
-            try output.write(toFile: filePath, atomically: true, encoding: .utf8)
-            print("DEBUG: Exported dictionary structure to \(filePath)")
-        } catch {
-            print("DEBUG: Failed to export dictionary: \(error)")
-        }
-    }
     
     @available(macOS 14.0, *)
     public func setScreensaverForSpaceID(module: String, spaceID: Int, screen: NSScreen? = nil) async throws {
@@ -887,7 +816,6 @@ extension ScreensaverManager: SpaceManaging {
             let spaceInfo = SpaceInfo(
                 uuid: spaceUUID,
                 displayUUIDs: displayUUIDs,
-                isActive: true, // Has wallpaper config
                 name: nil,
                 spaceID: mcSpace?.spaceID,
                 displayIdentifier: mcSpace?.displayIdentifier,
@@ -912,7 +840,6 @@ extension ScreensaverManager: SpaceManaging {
             let spaceInfo = SpaceInfo(
                 uuid: mcSpace.uuid,
                 displayUUIDs: [],
-                isActive: false, // No wallpaper config yet
                 name: nil,
                 spaceID: mcSpace.spaceID,
                 displayIdentifier: mcSpace.displayIdentifier,

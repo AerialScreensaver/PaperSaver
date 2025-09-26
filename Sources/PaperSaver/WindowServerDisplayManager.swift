@@ -6,9 +6,7 @@ public struct WindowServerDisplayConfig {
     public let uuid: String
     public let resolution: CGSize
     public let refreshRate: Int
-    public let position: CGPoint
     public let scale: Int
-    public let depth: Int
     public let configVersion: Int
     public let isInCurrentConfig: Bool
     
@@ -16,26 +14,18 @@ public struct WindowServerDisplayConfig {
         uuid: String,
         resolution: CGSize,
         refreshRate: Int,
-        position: CGPoint = .zero,
         scale: Int = 1,
-        depth: Int = 8,
         configVersion: Int = 0,
         isInCurrentConfig: Bool = false
     ) {
         self.uuid = uuid
         self.resolution = resolution
         self.refreshRate = refreshRate
-        self.position = position
         self.scale = scale
-        self.depth = depth
         self.configVersion = configVersion
         self.isInCurrentConfig = isInCurrentConfig
     }
     
-    public var displayDescription: String {
-        let scaleText = scale > 1 ? " @ \(scale)x" : ""
-        return "\(Int(resolution.width))x\(Int(resolution.height)) @ \(refreshRate)Hz\(scaleText)"
-    }
 }
 
 @available(macOS 14.0, *)
@@ -105,26 +95,20 @@ public final class WindowServerDisplayManager: @unchecked Sendable {
                       let width = currentInfo["Wide"] as? Int,
                       let height = currentInfo["High"] as? Int,
                       let hz = currentInfo["Hz"] as? Int,
-                      let scale = currentInfo["Scale"] as? Int,
-                      let depth = currentInfo["Depth"] as? Int else {
+                      let scale = currentInfo["Scale"] as? Int else {
                     continue
                 }
-                
+
                 // Skip if we've already processed this UUID with current config
                 if processedUUIDs.contains(uuid) {
                     continue
                 }
-                
-                let originX = (currentInfo["OriginX"] as? String).flatMap { Int($0) } ?? (currentInfo["OriginX"] as? Int) ?? 0
-                let originY = (currentInfo["OriginY"] as? String).flatMap { Int($0) } ?? (currentInfo["OriginY"] as? Int) ?? 0
-                
+
                 let displayConfig = WindowServerDisplayConfig(
                     uuid: uuid,
                     resolution: CGSize(width: width, height: height),
                     refreshRate: hz,
-                    position: CGPoint(x: originX, y: originY),
                     scale: scale,
-                    depth: depth,
                     configVersion: configVersion,
                     isInCurrentConfig: currentDisplayUUIDs.contains(uuid)
                 )

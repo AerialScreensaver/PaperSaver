@@ -129,9 +129,9 @@ public final class PlistManager: @unchecked Sendable {
         case .traditional, .quartz:
             return try createTraditionalScreensaverConfiguration(moduleURL: moduleURL)
         case .appExtension:
-            return try createNeptuneExtensionConfiguration(moduleURL: moduleURL)
+            return try createNeptuneExtensionConfiguration()
         case .sequoiaVideo:
-            return try createSequoiaVideoConfiguration(name: moduleURL.deletingPathExtension().lastPathComponent)
+            return try createSequoiaVideoConfiguration()
         case .builtInMac:
             // Built-in Mac screensavers have empty configuration
             return Data()
@@ -155,7 +155,7 @@ public final class PlistManager: @unchecked Sendable {
         return try createBinaryPlist(from: config)
     }
     
-    private func createNeptuneExtensionConfiguration(moduleURL: URL) throws -> Data {
+    private func createNeptuneExtensionConfiguration() throws -> Data {
         // Neptune extensions use different configuration structure
         // Based on analysis, we'll create a placeholder structure
         // This will need to be refined based on actual .appex analysis
@@ -172,7 +172,7 @@ public final class PlistManager: @unchecked Sendable {
         return try createBinaryPlist(from: config)
     }
     
-    private func createSequoiaVideoConfiguration(name: String) throws -> Data {
+    private func createSequoiaVideoConfiguration() throws -> Data {
         // Sequoia video screensavers use values/appearance/picker structure
         let config: [String: Any] = [
             "values": [

@@ -74,35 +74,7 @@ public class PaperSaver {
         try await wallpaperManager.setWallpaperForDisplaySpace(imageURL: imageURL, displayNumber: displayNumber, spaceNumber: spaceNumber, options: options)
     }
     
-    public var systemInfo: SystemVersionInfo {
-        return SystemVersionInfo()
-    }
     
-    public var capabilities: (
-        perScreenConfiguration: Bool,
-        perSpaceConfiguration: Bool,
-        requiresFullDiskAccess: Bool,
-        supportsDynamicWallpapers: Bool
-    ) {
-        return (
-            perScreenConfiguration: SystemCapabilities.supportsPerScreenConfiguration,
-            perSpaceConfiguration: SystemCapabilities.supportsPerSpaceConfiguration,
-            requiresFullDiskAccess: SystemCapabilities.requiresFullDiskAccess,
-            supportsDynamicWallpapers: SystemCapabilities.supportsDynamicWallpapers
-        )
-    }
-    
-    @available(macOS 14.0, *)
-    public func listSpaces() -> [SpaceInfo] {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return [] }
-        return spaceManager.listSpaces()
-    }
-    
-    @available(macOS 14.0, *)
-    public func getAllSpaces(includeHistorical: Bool = false) -> [SpaceInfo] {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return [] }
-        return spaceManager.getAllSpaces(includeHistorical: includeHistorical)
-    }
     
     @available(macOS 14.0, *)
     public func getActiveSpace() -> SpaceInfo? {
@@ -110,11 +82,6 @@ public class PaperSaver {
         return spaceManager.getActiveSpace()
     }
     
-    @available(macOS 14.0, *)
-    public func getActiveSpaces() -> [SpaceInfo] {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return [] }
-        return spaceManager.getActiveSpaces()
-    }
     
     @available(macOS 14.0, *)
     public func getSpaceByID(_ spaceID: Int) -> SpaceInfo? {
@@ -128,17 +95,6 @@ public class PaperSaver {
         return spaceManager.listDisplays()
     }
 
-    @available(macOS 14.0, *)
-    public func getDisplayUUID(for screen: NSScreen) -> String? {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return nil }
-        return spaceManager.getDisplayUUID(for: screen)
-    }
-
-    @available(macOS 14.0, *)
-    public func getSpacesForDisplay(_ displayIdentifier: String, includeHistorical: Bool = false) -> [SpaceInfo] {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return [] }
-        return spaceManager.getSpacesForDisplay(displayIdentifier, includeHistorical: includeHistorical)
-    }
     
     @available(macOS 14.0, *)
     public func setScreensaverForSpaceID(module: String, spaceID: Int, screen: NSScreen? = nil) async throws {

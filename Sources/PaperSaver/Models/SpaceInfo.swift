@@ -4,7 +4,6 @@ import CoreGraphics
 public struct SpaceInfo: Codable, Equatable {
     public let uuid: String
     public let displayUUIDs: [String]
-    public let isActive: Bool
     public let name: String?
     public let spaceID: Int?
     public let displayIdentifier: String?
@@ -14,7 +13,6 @@ public struct SpaceInfo: Codable, Equatable {
     public init(
         uuid: String,
         displayUUIDs: [String] = [],
-        isActive: Bool = false,
         name: String? = nil,
         spaceID: Int? = nil,
         displayIdentifier: String? = nil,
@@ -23,7 +21,6 @@ public struct SpaceInfo: Codable, Equatable {
     ) {
         self.uuid = uuid
         self.displayUUIDs = displayUUIDs
-        self.isActive = isActive
         self.name = name
         self.spaceID = spaceID
         self.displayIdentifier = displayIdentifier
@@ -35,49 +32,6 @@ public struct SpaceInfo: Codable, Equatable {
         return displayUUIDs.count
     }
     
-    public var isCurrentSpace: Bool {
-        return uuid.isEmpty || isCurrent
-    }
-    
-    public var isSystemDefault: Bool {
-        return uuid == "SystemDefault"
-    }
-    
-    public var displayName: String {
-        if let identifier = displayIdentifier {
-            switch identifier {
-            case "Main":
-                return "Main Display"
-            default:
-                if identifier.contains("-") {
-                    return "Display \(identifier.prefix(8))..."
-                }
-                return identifier
-            }
-        }
-        return "Unknown Display"
-    }
-    
-    public var friendlyName: String {
-        if let spaceID = spaceID {
-            let baseName = displayName == "Main Display" ? "Space \(spaceID)" : "\(displayName) Space \(spaceID)"
-            if isCurrent {
-                return "\(baseName) (Current)"
-            }
-            if isHistorical {
-                return "\(baseName) (Historical)"
-            }
-            return baseName
-        } else if isCurrentSpace {
-            return "Current Space"
-        } else if isSystemDefault {
-            return "System Default"
-        } else if let name = name {
-            return name
-        } else {
-            return "Space \(uuid.prefix(8))..."
-        }
-    }
     
     public func contains(displayUUID: String) -> Bool {
         return displayUUIDs.contains(displayUUID)
@@ -154,14 +108,6 @@ public struct DisplayInfo: Equatable {
         }
     }
     
-    public var description: String {
-        if let displayID = displayID {
-            // friendlyName already includes "(Main)" if applicable, don't duplicate
-            return "\(friendlyName) (ID: \(displayID), \(displayDescription))"
-        } else {
-            return "\(friendlyName) (\(displayDescription)) (disconnected)"
-        }
-    }
 }
 
 extension DisplayInfo: Codable {
@@ -207,24 +153,3 @@ extension DisplayInfo: Codable {
     }
 }
 
-public struct SpaceDisplayConfig: Codable, Equatable {
-    public let spaceUUID: String
-    public let displayUUID: String
-    public let hasDesktopConfig: Bool
-    public let hasIdleConfig: Bool
-    public let screensaverModule: String?
-    
-    public init(
-        spaceUUID: String,
-        displayUUID: String,
-        hasDesktopConfig: Bool = false,
-        hasIdleConfig: Bool = false,
-        screensaverModule: String? = nil
-    ) {
-        self.spaceUUID = spaceUUID
-        self.displayUUID = displayUUID
-        self.hasDesktopConfig = hasDesktopConfig
-        self.hasIdleConfig = hasIdleConfig
-        self.screensaverModule = screensaverModule
-    }
-}

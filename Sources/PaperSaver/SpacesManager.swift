@@ -28,17 +28,6 @@ public struct MissionControlSpace {
         return isCollapsed || isAutoCreated
     }
     
-    public var displayName: String {
-        switch displayIdentifier {
-        case "Main":
-            return "Main Display"
-        default:
-            if displayIdentifier.contains("-") {
-                return "Display \(displayIdentifier.prefix(8))..."
-            }
-            return displayIdentifier
-        }
-    }
 }
 
 @available(macOS 14.0, *)
@@ -55,39 +44,12 @@ public final class SpacesManager: @unchecked Sendable {
         return parseSpacesConfiguration(spacesData)
     }
     
-    public func getCurrentSpaces() -> [MissionControlSpace] {
-        return getMissionControlSpaces().filter { $0.isCurrent }
-    }
-    
-    public func getActiveSpaces() -> [MissionControlSpace] {
-        return getMissionControlSpaces().filter { !$0.isHistorical }
-    }
     
     public func getSpaceByID(_ spaceID: Int) -> MissionControlSpace? {
         return getMissionControlSpaces().first { $0.spaceID == spaceID }
     }
     
-    public func getSpaceByUUID(_ uuid: String) -> MissionControlSpace? {
-        return getMissionControlSpaces().first { $0.uuid == uuid }
-    }
     
-    public func getCurrentSpaceForDisplay(_ displayIdentifier: String) -> MissionControlSpace? {
-        return getCurrentSpaces().first { $0.displayIdentifier == displayIdentifier }
-    }
-    
-    public func getSpacesForDisplay(_ displayIdentifier: String, includeHistorical: Bool = false) -> [MissionControlSpace] {
-        let spaces = getMissionControlSpaces().filter { $0.displayIdentifier == displayIdentifier }
-        return includeHistorical ? spaces : spaces.filter { !$0.isHistorical }
-    }
-    
-    public func getDisplayIdentifiers() -> [String] {
-        let spaces = getMissionControlSpaces()
-        return Array(Set(spaces.map { $0.displayIdentifier })).sorted { first, second in
-            if first == "Main" { return true }
-            if second == "Main" { return false }
-            return first < second
-        }
-    }
     
     private func readSpacesPreferences() -> [String: Any]? {
         let defaults = UserDefaults(suiteName: "com.apple.spaces")

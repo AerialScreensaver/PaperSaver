@@ -69,7 +69,4 @@ public struct ScreensaverModule: Codable, Equatable {
         self.thumbnail = thumbnail
     }
     
-    public var isAvailable: Bool {
-        FileManager.default.fileExists(atPath: path.path)
-    }
 }
