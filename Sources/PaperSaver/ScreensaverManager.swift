@@ -202,22 +202,25 @@ public class ScreensaverManager: ScreensaverManaging {
             return nil
         }
 
-        // Check if we have a Spaces structure (multi-space configuration)
+        // Check in priority order matching macOS behavior:
+        // 1. AllSpacesAndDisplays (highest priority - what system actually uses)
+        // 2. Spaces[UUID] (medium priority)
+        // 3. SystemDefault (fallback)
         var spaceConfig: [String: Any]?
 
-        if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
-            // Try the specific space UUID first
+        // First check AllSpacesAndDisplays - this takes precedence in macOS
+        if let allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
+            spaceConfig = allSpacesAndDisplays
+        } else if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
+            // Then check Spaces structure (multi-space configuration)
             if let config = spaces[lookupUUID] as? [String: Any] {
                 spaceConfig = config
             } else if !lookupUUID.isEmpty {
                 // If specific UUID not found and it's not empty, try empty string (default)
                 spaceConfig = spaces[""] as? [String: Any]
             }
-        } else if let allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
-            // Handle single screen/space configuration with AllSpacesAndDisplays (takes precedence)
-            spaceConfig = allSpacesAndDisplays
         } else if let systemDefault = plist["SystemDefault"] as? [String: Any] {
-            // Handle single screen/space configuration with SystemDefault (fallback)
+            // Finally fall back to SystemDefault
             spaceConfig = systemDefault
         }
 
@@ -550,12 +553,18 @@ public class ScreensaverManager: ScreensaverManaging {
     ) throws -> [String: Any] {
         var modifiedPlist = plist
 
+        // Always update AllSpacesAndDisplays first (highest priority)
+        // This ensures the screensaver applies everywhere regardless of other configurations
+        var allSpacesAndDisplays = modifiedPlist["AllSpacesAndDisplays"] as? [String: Any] ?? ["Type": "idle"]
+        allSpacesAndDisplays["Idle"] = createIdleConfiguration(with: configurationData)
+        modifiedPlist["AllSpacesAndDisplays"] = allSpacesAndDisplays
+
         // Check if we're in a single screen/space configuration
         if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
             // Multi-space configuration - set on all displays
             let spaceTree = getNativeSpaceTree()
             guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
-                // Fallback to setting default space
+                // Fallback to setting default space (which will update all sections)
                 return try modifyPlistForDefaultSpace(modifiedPlist, configurationData: configurationData)
             }
 
@@ -567,10 +576,12 @@ public class ScreensaverManager: ScreensaverManaging {
             for displayNumber in displayNumbers {
                 modifiedPlist = try modifyPlistForDisplay(modifiedPlist, displayNumber: displayNumber, configurationData: configurationData)
             }
-        } else {
-            // Single screen/space configuration - use SystemDefault
-            modifiedPlist = try modifyPlistForDefaultSpace(modifiedPlist, configurationData: configurationData)
         }
+
+        // Always update SystemDefault for compatibility
+        var systemDefault = modifiedPlist["SystemDefault"] as? [String: Any] ?? ["Type": "individual"]
+        systemDefault["Idle"] = createIdleConfiguration(with: configurationData)
+        modifiedPlist["SystemDefault"] = systemDefault
 
         return modifiedPlist
     }
@@ -583,9 +594,16 @@ public class ScreensaverManager: ScreensaverManaging {
     ) throws -> [String: Any] {
         var modifiedPlist = plist
 
-        // Check if we should use SystemDefault or Spaces with empty UUID
-        if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
-            // Use Spaces with empty UUID
+        // Update ALL relevant sections for consistency with macOS precedence
+        // This ensures the screensaver is applied correctly regardless of which section macOS reads
+
+        // 1. Always update AllSpacesAndDisplays (highest priority in macOS)
+        var allSpacesAndDisplays = modifiedPlist["AllSpacesAndDisplays"] as? [String: Any] ?? ["Type": "idle"]
+        allSpacesAndDisplays["Idle"] = createIdleConfiguration(with: configurationData)
+        modifiedPlist["AllSpacesAndDisplays"] = allSpacesAndDisplays
+
+        // 2. Update Spaces[""] if Spaces exists (medium priority)
+        if let spaces = plist["Spaces"] as? [String: Any] {
             var spacesDict = spaces
             var spaceConfig = spacesDict[""] as? [String: Any] ?? [:]
 
@@ -608,18 +626,12 @@ public class ScreensaverManager: ScreensaverManaging {
 
             spacesDict[""] = spaceConfig
             modifiedPlist["Spaces"] = spacesDict
-        } else {
-            // Use SystemDefault for single screen/space configuration
-            var systemDefault = plist["SystemDefault"] as? [String: Any] ?? ["Type": "individual"]
-            systemDefault["Idle"] = createIdleConfiguration(with: configurationData)
-            modifiedPlist["SystemDefault"] = systemDefault
-
-            // Also update AllSpacesAndDisplays if it exists (it may take precedence)
-            if var allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
-                allSpacesAndDisplays["Idle"] = createIdleConfiguration(with: configurationData)
-                modifiedPlist["AllSpacesAndDisplays"] = allSpacesAndDisplays
-            }
         }
+
+        // 3. Always update SystemDefault for compatibility (lowest priority)
+        var systemDefault = modifiedPlist["SystemDefault"] as? [String: Any] ?? ["Type": "individual"]
+        systemDefault["Idle"] = createIdleConfiguration(with: configurationData)
+        modifiedPlist["SystemDefault"] = systemDefault
 
         return modifiedPlist
     }

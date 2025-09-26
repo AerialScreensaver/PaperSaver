@@ -358,10 +358,17 @@ struct PaperSaverCLI {
             return nil
         }
 
-        // Check if we have a Spaces structure (multi-space configuration)
+        // Check in priority order matching macOS behavior:
+        // 1. AllSpacesAndDisplays (highest priority - what system actually uses)
+        // 2. Spaces[UUID] (medium priority)
+        // 3. SystemDefault (fallback)
         var spaceConfig: [String: Any]?
 
-        if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
+        if let allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
+            // Handle single screen/space configuration with AllSpacesAndDisplays (takes precedence)
+            if debug { print("DEBUG: Using AllSpacesAndDisplays configuration (highest priority)") }
+            spaceConfig = allSpacesAndDisplays
+        } else if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
             if debug {
                 print("DEBUG: Found \(spaces.keys.count) space configurations in plist")
                 print("DEBUG: Space keys available: \(spaces.keys.sorted())")
@@ -382,13 +389,9 @@ struct PaperSaverCLI {
                     }
                 }
             }
-        } else if let allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
-            // Handle single screen/space configuration with AllSpacesAndDisplays (takes precedence)
-            if debug { print("DEBUG: No Spaces configurations found, using AllSpacesAndDisplays configuration") }
-            spaceConfig = allSpacesAndDisplays
         } else if let systemDefault = plist["SystemDefault"] as? [String: Any] {
             // Handle single screen/space configuration with SystemDefault (fallback)
-            if debug { print("DEBUG: No Spaces or AllSpacesAndDisplays found, using SystemDefault configuration") }
+            if debug { print("DEBUG: Using SystemDefault configuration (lowest priority)") }
             spaceConfig = systemDefault
         }
 
