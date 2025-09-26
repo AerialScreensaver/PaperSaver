@@ -52,25 +52,13 @@ public final class WindowServerDisplayManager: @unchecked Sendable {
         return parseDisplayConfigurations(displaySets)
     }
     
-    public func getCurrentlyConnectedDisplays() -> [WindowServerDisplayConfig] {
-        return getWindowServerDisplays().filter { $0.isInCurrentConfig }
-    }
-    
-    public func getHistoricalDisplays() -> [WindowServerDisplayConfig] {
-        return getWindowServerDisplays().filter { !$0.isInCurrentConfig }
-    }
-    
     public func getAllKnownDisplayUUIDs() -> Set<String> {
         guard let displaySets = readWindowServerPreferences(),
               let underscan = displaySets["Underscan"] as? [String: Any] else {
             return Set()
         }
-        
+
         return Set(underscan.keys)
-    }
-    
-    public func getDisplayConfig(for uuid: String) -> WindowServerDisplayConfig? {
-        return getWindowServerDisplays().first { $0.uuid == uuid }
     }
     
     private func readWindowServerPreferences() -> [String: Any]? {
@@ -105,7 +93,7 @@ public final class WindowServerDisplayManager: @unchecked Sendable {
         // Process all configurations to build comprehensive display list
         var processedUUIDs = Set<String>()
         
-        for (configIndex, config) in configs.enumerated() {
+        for config in configs {
             guard let displayConfig = config["DisplayConfig"] as? [[String: Any]],
                   let configVersion = config["ConfigVersion"] as? Int else {
                 continue

@@ -51,7 +51,7 @@ public class ConfigurationManager {
         keyPath: [String],
         with value: Any
     ) throws -> [String: Any] {
-        guard var plist = try? plistManager.read(at: path) else {
+        guard let plist = try? plistManager.read(at: path) else {
             throw PaperSaverError.plistReadError(path)
         }
         

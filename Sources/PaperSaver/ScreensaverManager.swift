@@ -39,14 +39,9 @@ public protocol SpaceManaging {
     func getActiveSpace() -> SpaceInfo?
     func getActiveSpaces() -> [SpaceInfo]
     func getSpaceByID(_ spaceID: Int) -> SpaceInfo?
-    func getSpaceByUUID(_ uuid: String) -> SpaceInfo?
-    func getCurrentSpaceForDisplay(_ displayIdentifier: String) -> SpaceInfo?
     func getSpacesForDisplay(_ displayIdentifier: String, includeHistorical: Bool) -> [SpaceInfo]
-    func getCurrentSpaceID() -> Int?
-    func isSpaceActive(_ spaceUUID: String) -> Bool
     func listDisplays() -> [DisplayInfo]
     func getDisplayUUID(for screen: NSScreen) -> String?
-    func getSpaceDisplayConfigs() -> [SpaceDisplayConfig]
     func getNativeSpaceTree() -> [String: Any]
     func getSpaceUUID(displayNumber: Int, spaceNumber: Int) -> String?
     func getAllSpaceUUIDs(for displayNumber: Int) -> [String]
@@ -968,25 +963,9 @@ extension ScreensaverManager: SpaceManaging {
         return listSpaces().first { $0.spaceID == spaceID }
     }
     
-    public func getSpaceByUUID(_ uuid: String) -> SpaceInfo? {
-        return listSpaces().first { $0.uuid == uuid }
-    }
-    
-    public func getCurrentSpaceForDisplay(_ displayIdentifier: String) -> SpaceInfo? {
-        return listSpaces().first { $0.displayIdentifier == displayIdentifier && $0.isCurrent }
-    }
-    
     public func getSpacesForDisplay(_ displayIdentifier: String, includeHistorical: Bool = false) -> [SpaceInfo] {
         return getAllSpaces(includeHistorical: includeHistorical)
             .filter { $0.displayIdentifier == displayIdentifier }
-    }
-    
-    public func getCurrentSpaceID() -> Int? {
-        return getActiveSpace()?.spaceID
-    }
-    
-    public func isSpaceActive(_ spaceUUID: String) -> Bool {
-        return getActiveSpaces().contains { $0.uuid == spaceUUID }
     }
     
     public func listDisplays() -> [DisplayInfo] {
@@ -1046,50 +1025,6 @@ extension ScreensaverManager: SpaceManaging {
         return listSpaces().filter { $0.contains(displayUUID: displayUUID) }
     }
     
-    public func getSpaceDisplayConfigs() -> [SpaceDisplayConfig] {
-        let indexPath = SystemPaths.wallpaperIndexPath
-        
-        guard let plist = try? plistManager.read(at: indexPath),
-              let spaces = plist["Spaces"] as? [String: Any] else {
-            return []
-        }
-        
-        var configs: [SpaceDisplayConfig] = []
-        
-        for (spaceUUID, spaceValue) in spaces {
-            guard let spaceConfig = spaceValue as? [String: Any],
-                  let displays = spaceConfig["Displays"] as? [String: Any] else { continue }
-            
-            for (displayUUID, displayValue) in displays {
-                guard let displayConfig = displayValue as? [String: Any] else { continue }
-                
-                let hasDesktop = displayConfig["Desktop"] != nil
-                let hasIdle = displayConfig["Idle"] != nil
-                
-                var screensaverModule: String?
-                if hasIdle,
-                   let idle = displayConfig["Idle"] as? [String: Any],
-                   let content = idle["Content"] as? [String: Any],
-                   let choices = content["Choices"] as? [[String: Any]],
-                   let firstChoice = choices.first,
-                   let configData = firstChoice["Configuration"] as? Data {
-                    screensaverModule = try? plistManager.decodeScreensaverConfiguration(from: configData)
-                }
-                
-                let config = SpaceDisplayConfig(
-                    spaceUUID: spaceUUID,
-                    displayUUID: displayUUID,
-                    hasDesktopConfig: hasDesktop,
-                    hasIdleConfig: hasIdle,
-                    screensaverModule: screensaverModule
-                )
-                
-                configs.append(config)
-            }
-        }
-        
-        return configs
-    }
     
     private func findMatchingScreen(uuid: String, activeScreens: [NSScreen]) -> (CGDirectDisplayID?, CGRect?, Bool, String?) {
         // Use ColorSync API for perfect UUID to Display ID correlation
@@ -1109,13 +1044,8 @@ extension ScreensaverManager: SpaceManaging {
             if let screenDisplayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
                screenDisplayID == displayID {
                 
-                // Get the real display name (available in macOS 10.15+)
-                let displayName: String?
-                if #available(macOS 10.15, *) {
-                    displayName = screen.localizedName
-                } else {
-                    displayName = nil
-                }
+                // Get the real display name
+                let displayName = screen.localizedName
                 
                 return (displayID, screen.frame, screen == NSScreen.main, displayName)
             }
@@ -1153,13 +1083,8 @@ extension ScreensaverManager: SpaceManaging {
             if let screenDisplayID = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? CGDirectDisplayID,
                screenDisplayID == displayID {
                 
-                if #available(macOS 10.15, *) {
-                    let isMain = screen == NSScreen.main
-                    return isMain ? "\(screen.localizedName) (Main)" : screen.localizedName
-                } else {
-                    let isMain = screen == NSScreen.main
-                    return isMain ? "Main Display" : "Display \(String(displayUUID.prefix(8)))..."
-                }
+                let isMain = screen == NSScreen.main
+                return isMain ? "\(screen.localizedName) (Main)" : screen.localizedName
             }
         }
         

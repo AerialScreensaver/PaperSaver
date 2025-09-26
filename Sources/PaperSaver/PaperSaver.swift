@@ -123,51 +123,21 @@ public class PaperSaver {
     }
     
     @available(macOS 14.0, *)
-    public func getSpaceByUUID(_ uuid: String) -> SpaceInfo? {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return nil }
-        return spaceManager.getSpaceByUUID(uuid)
-    }
-    
-    @available(macOS 14.0, *)
-    public func getCurrentSpaceForDisplay(_ displayIdentifier: String) -> SpaceInfo? {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return nil }
-        return spaceManager.getCurrentSpaceForDisplay(displayIdentifier)
-    }
-    
-    @available(macOS 14.0, *)
-    public func getCurrentSpaceID() -> Int? {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return nil }
-        return spaceManager.getCurrentSpaceID()
-    }
-    
-    @available(macOS 14.0, *)
-    public func isSpaceActive(_ spaceUUID: String) -> Bool {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return false }
-        return spaceManager.isSpaceActive(spaceUUID)
-    }
-    
-    @available(macOS 14.0, *)
     public func listDisplays() -> [DisplayInfo] {
         guard let spaceManager = screensaverManager as? SpaceManaging else { return [] }
         return spaceManager.listDisplays()
     }
-    
+
     @available(macOS 14.0, *)
     public func getDisplayUUID(for screen: NSScreen) -> String? {
         guard let spaceManager = screensaverManager as? SpaceManaging else { return nil }
         return spaceManager.getDisplayUUID(for: screen)
     }
-    
+
     @available(macOS 14.0, *)
     public func getSpacesForDisplay(_ displayIdentifier: String, includeHistorical: Bool = false) -> [SpaceInfo] {
         guard let spaceManager = screensaverManager as? SpaceManaging else { return [] }
         return spaceManager.getSpacesForDisplay(displayIdentifier, includeHistorical: includeHistorical)
-    }
-    
-    @available(macOS 14.0, *)
-    public func getSpaceDisplayConfigs() -> [SpaceDisplayConfig] {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return [] }
-        return spaceManager.getSpaceDisplayConfigs()
     }
     
     @available(macOS 14.0, *)

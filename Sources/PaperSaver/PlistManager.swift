@@ -116,19 +116,6 @@ public final class PlistManager: @unchecked Sendable {
         try FileManager.default.copyItem(at: backupURL, to: originalURL)
     }
     
-    public func decodeBase64Plist(from base64String: String) throws -> [String: Any] {
-        guard let data = Data(base64Encoded: base64String) else {
-            throw PaperSaverError.invalidConfiguration("Invalid base64 encoding")
-        }
-        
-        return try readBinaryPlist(from: data)
-    }
-    
-    public func encodeAsBase64Plist(_ dictionary: [String: Any]) throws -> String {
-        let data = try createBinaryPlist(from: dictionary)
-        return data.base64EncodedString()
-    }
-    
     public func createScreensaverConfiguration(moduleURL: URL) throws -> Data {
         // Determine screensaver type from URL extension
         let `extension` = moduleURL.pathExtension.lowercased()

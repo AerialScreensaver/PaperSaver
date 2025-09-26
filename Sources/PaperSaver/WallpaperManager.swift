@@ -42,8 +42,8 @@ public class WallpaperManager: WallpaperManaging {
     public func getCurrentWallpaper(for screen: NSScreen?) -> WallpaperInfo? {
         if #available(macOS 14.0, *) {
             // Use the same Spaces structure approach as other functions
-            guard let spaceTree = (screensaverManager as? SpaceManaging)?.getNativeSpaceTree(),
-                  let monitors = spaceTree["monitors"] as? [[String: Any]] else {
+            let spaceTree = screensaverManager.getNativeSpaceTree()
+            guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
                 return nil
             }
 
@@ -194,7 +194,7 @@ public class WallpaperManager: WallpaperManaging {
             throw PaperSaverError.fileNotFound(imageURL)
         }
         
-        guard let spaceInfo = (screensaverManager as? SpaceManaging)?.getSpaceByID(spaceID) else {
+        guard let spaceInfo = screensaverManager.getSpaceByID(spaceID) else {
             throw PaperSaverError.spaceNotFound
         }
         
@@ -254,7 +254,7 @@ public class WallpaperManager: WallpaperManaging {
         }
         
         if #available(macOS 14.0, *) {
-            let spaceTree = (screensaverManager as? SpaceManaging)?.getNativeSpaceTree() ?? [:]
+            let spaceTree = screensaverManager.getNativeSpaceTree()
             
             guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
                 try await setWallpaper(imageURL: imageURL, screen: nil, options: options)
@@ -292,7 +292,7 @@ public class WallpaperManager: WallpaperManaging {
         let configurationData = try plistManager.createWallpaperConfiguration(imageURL: imageURL)
         let optionsData = try plistManager.createWallpaperOptions(style: options.style)
         
-        let spaceTree = (screensaverManager as? SpaceManaging)?.getNativeSpaceTree() ?? [:]
+        let spaceTree = screensaverManager.getNativeSpaceTree()
         
         guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
             throw PaperSaverError.displayNotFound(displayNumber)
@@ -351,7 +351,7 @@ public class WallpaperManager: WallpaperManaging {
             throw PaperSaverError.fileNotFound(imageURL)
         }
         
-        guard let spaceUUID = (screensaverManager as? SpaceManaging)?.getSpaceUUID(displayNumber: displayNumber, spaceNumber: spaceNumber) else {
+        guard let spaceUUID = screensaverManager.getSpaceUUID(displayNumber: displayNumber, spaceNumber: spaceNumber) else {
             throw PaperSaverError.spaceNotFound
         }
         
@@ -361,7 +361,7 @@ public class WallpaperManager: WallpaperManaging {
     }
     
     private func createDesktopConfiguration(with configurationData: Data, options: Data) -> [String: Any] {
-        var content: [String: Any] = [
+        let content: [String: Any] = [
             "Choices": [
                 [
                     "Configuration": configurationData,
@@ -371,10 +371,10 @@ public class WallpaperManager: WallpaperManaging {
             ],
             "EncodedOptionValues": options
         ]
-        
+
         // Don't add Shuffle key at all to avoid NSNull issues
         // The system will handle the default value
-        
+
         return [
             "Content": content,
             "LastSet": Date(),
