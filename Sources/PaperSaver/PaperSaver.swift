@@ -242,6 +242,8 @@ public class PaperSaver {
 
     /// Sets the wallpaper for a specific screen.
     ///
+    /// - Warning: Wallpaper functionality is not ready for use in the current version.
+    ///
     /// This function configures a new wallpaper image for the specified screen.
     /// The operation is asynchronous and may take a moment to complete as the
     /// system processes and applies the image.
@@ -262,6 +264,8 @@ public class PaperSaver {
     }
 
     /// Sets the same wallpaper across all screens and spaces.
+    ///
+    /// - Warning: Wallpaper functionality is not ready for use in the current version.
     ///
     /// This function applies the specified wallpaper image to all displays
     /// and spaces in the system, creating a unified desktop experience.
@@ -285,6 +289,8 @@ public class PaperSaver {
 
     /// Sets the wallpaper for a specific space identified by UUID.
     ///
+    /// - Warning: Wallpaper functionality is not ready for use in the current version.
+    ///
     /// This advanced function allows you to configure different wallpapers
     /// for individual spaces (virtual desktops) in macOS. Each space can have
     /// its own unique wallpaper.
@@ -307,6 +313,8 @@ public class PaperSaver {
 
     /// Sets the wallpaper for a specific space identified by numeric ID.
     ///
+    /// - Warning: Wallpaper functionality is not ready for use in the current version.
+    ///
     /// This function provides an alternative way to target spaces using their
     /// numeric identifier instead of UUID. Useful when working with space
     /// numbers from Mission Control or other system tools.
@@ -328,6 +336,8 @@ public class PaperSaver {
 
     /// Sets the wallpaper for all spaces on a specific display.
     ///
+    /// - Warning: Wallpaper functionality is not ready for use in the current version.
+    ///
     /// This function configures the wallpaper for an entire display,
     /// affecting all spaces on that display. Useful in multi-monitor
     /// setups where you want different wallpapers per display.
@@ -347,6 +357,8 @@ public class PaperSaver {
     }
 
     /// Sets the wallpaper for a specific space on a specific display.
+    ///
+    /// - Warning: Wallpaper functionality is not ready for use in the current version.
     ///
     /// This is the most granular wallpaper configuration function, allowing
     /// you to target a specific space on a specific display. Perfect for
