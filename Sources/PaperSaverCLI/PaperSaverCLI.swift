@@ -443,35 +443,126 @@ struct PaperSaverCLI {
                 if defaultConfig["Idle"] is [String: Any] {
                     print("DEBUG: Found Idle in Default")
                 }
+                if defaultConfig["Linked"] is [String: Any] {
+                    print("DEBUG: Found Linked in Default")
+                }
+            } else {
+                print("DEBUG: No Default section found")
             }
         }
+
+        // Check for Default -> Idle configuration FIRST (explicit screensaver settings take precedence)
+        if let defaultConfig = config["Default"] as? [String: Any] {
+            if debug {
+                print("DEBUG: Checking Default -> Idle for space UUID '\(spaceUUID)'")
+                if defaultConfig["Idle"] != nil {
+                    print("DEBUG: Found Idle in Default section")
+                } else {
+                    print("DEBUG: No Idle found in Default section")
+                }
+            }
+
+            if let idle = defaultConfig["Idle"] as? [String: Any],
+               let content = idle["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data {
+
+                if debug {
+                    print("DEBUG: Using Default -> Idle configuration for space UUID '\(spaceUUID)' (takes precedence over Linked)")
+                }
+
+                // Use the new type-aware decoding method
+                if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                    if let screensaverName = name {
+                        if debug {
+                            print("DEBUG: Successfully decoded screensaver name from Default: '\(screensaverName)' type: '\(type.displayName)'")
+                        }
+                        return "\(screensaverName) (\(type.displayName))"
+                    }
+                }
+
+                // Fallback to old method for compatibility
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    if debug {
+                        print("DEBUG: Old method decoded module name from Default: '\(moduleName)'")
+                    }
+                    return moduleName
+                }
+            }
+        }
+
+        // Check for Linked configurations in Default section (fallback for dynamic desktop in Automatic mode)
         if let defaultConfig = config["Default"] as? [String: Any],
-           let idle = defaultConfig["Idle"] as? [String: Any],
-           let content = idle["Content"] as? [String: Any],
+           let linked = defaultConfig["Linked"] as? [String: Any],
+           let content = linked["Content"] as? [String: Any],
            let choices = content["Choices"] as? [[String: Any]],
            let firstChoice = choices.first,
            let configurationData = firstChoice["Configuration"] as? Data {
 
             if debug {
-                print("DEBUG: Using Default -> Idle configuration for space UUID '\(spaceUUID)'")
+                print("DEBUG: Found Linked configuration with nested Content structure in Default")
+                print("DEBUG: Configuration data size: \(configurationData.count) bytes")
+                print("DEBUG: First choice keys: \(firstChoice.keys.sorted())")
+                if let provider = firstChoice["Provider"] as? String {
+                    print("DEBUG: Provider: '\(provider)'")
+                }
+            }
+
+            // Handle empty configuration data for Neptune extensions (dynamic desktops)
+            if let provider = firstChoice["Provider"] as? String,
+               provider == "com.apple.NeptuneOneExtension" && configurationData.isEmpty {
+                if debug {
+                    print("DEBUG: Found Neptune extension with empty config - this is a dynamic desktop")
+                }
+                return "Dynamic Desktop (App Extension)"
             }
 
             // Use the new type-aware decoding method
             if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
                 if let screensaverName = name {
                     if debug {
-                        print("DEBUG: Successfully decoded screensaver name from Default: '\(screensaverName)' type: '\(type.displayName)'")
+                        print("DEBUG: Successfully decoded Linked screensaver name from Default: '\(screensaverName)' type: '\(type.displayName)'")
                     }
                     return "\(screensaverName) (\(type.displayName))"
+                } else {
+                    if debug {
+                        print("DEBUG: Type-aware method returned nil name for type: '\(type.displayName)'")
+                    }
+                }
+            } else {
+                if debug {
+                    print("DEBUG: Type-aware decoding failed for Linked configuration")
                 }
             }
 
             // Fallback to old method for compatibility
             if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
                 if debug {
-                    print("DEBUG: Old method decoded module name from Default: '\(moduleName)'")
+                    print("DEBUG: Old method decoded Linked module name from Default: '\(moduleName)'")
                 }
                 return moduleName
+            } else {
+                if debug {
+                    print("DEBUG: Old method also failed to decode Linked configuration")
+                }
+            }
+        }
+
+        // Check for simple Linked configurations without nested structure
+        if let defaultConfig = config["Default"] as? [String: Any],
+           let linked = defaultConfig["Linked"] as? [String: Any],
+           let provider = linked["Provider"] as? String {
+
+            if debug {
+                print("DEBUG: Found simple Linked configuration in Default with provider: '\(provider)'")
+            }
+
+            if provider == "com.apple.NeptuneOneExtension" {
+                if debug {
+                    print("DEBUG: Linked configuration is a dynamic desktop")
+                }
+                return "Dynamic Desktop (App Extension)"
             }
         }
 
@@ -550,136 +641,121 @@ struct PaperSaverCLI {
             if debug {
                 print("DEBUG: Display '\(displayKey)' config keys: \(displayConfig.keys.sorted())")
             }
-            
-            guard let idle = displayConfig["Idle"] as? [String: Any] else {
-                if debug { print("DEBUG: Display '\(displayKey)' has no Idle configuration") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' Idle keys: \(idle.keys.sorted())")
-            }
-            
-            guard let content = idle["Content"] as? [String: Any] else {
-                if debug { print("DEBUG: Display '\(displayKey)' Idle has no Content") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' Content keys: \(content.keys.sorted())")
-            }
-            
-            guard let choices = content["Choices"] as? [[String: Any]] else {
-                if debug { print("DEBUG: Display '\(displayKey)' Content has no Choices array") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' has \(choices.count) choice(s)")
-            }
-            
-            guard let firstChoice = choices.first else {
-                if debug { print("DEBUG: Display '\(displayKey)' has empty Choices array") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' first choice keys: \(firstChoice.keys.sorted())")
-            }
-            
-            guard let provider = firstChoice["Provider"] as? String else {
-                if debug { print("DEBUG: Display '\(displayKey)' first choice has no Provider") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' provider: '\(provider)'")
-            }
-            
-            guard let configurationData = firstChoice["Configuration"] as? Data else {
-                if debug { print("DEBUG: Display '\(displayKey)' first choice has no Configuration data") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' configuration data size: \(configurationData.count) bytes")
-            }
-            
-            // Use the new type-aware decoding method
-            if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
-                if let screensaverName = name {
-                    if debug {
-                        print("DEBUG: Successfully decoded screensaver name: '\(screensaverName)' type: '\(type.displayName)'")
+
+            // Check for Idle configurations FIRST (explicit screensaver settings take precedence)
+            if let idle = displayConfig["Idle"] as? [String: Any],
+               let content = idle["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data {
+
+                if debug {
+                    print("DEBUG: Display '\(displayKey)' Idle keys: \(idle.keys.sorted())")
+                    print("DEBUG: Display '\(displayKey)' Content keys: \(content.keys.sorted())")
+                    print("DEBUG: Display '\(displayKey)' has \(choices.count) choice(s)")
+                    print("DEBUG: Display '\(displayKey)' first choice keys: \(firstChoice.keys.sorted())")
+
+                    if let provider = firstChoice["Provider"] as? String {
+                        print("DEBUG: Display '\(displayKey)' provider: '\(provider)'")
                     }
-                    return "\(screensaverName) (\(type.displayName))"
+                    print("DEBUG: Display '\(displayKey)' configuration data size: \(configurationData.count) bytes")
+                }
+
+                // Use the new type-aware decoding method
+                if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                    if let screensaverName = name {
+                        if debug {
+                            print("DEBUG: Successfully decoded screensaver name: '\(screensaverName)' type: '\(type.displayName)'")
+                        }
+                        return "\(screensaverName) (\(type.displayName))"
+                    } else {
+                        if debug {
+                            print("DEBUG: Decoded configuration but got nil name, type: '\(type.displayName)'")
+                        }
+                    }
                 } else {
                     if debug {
-                        print("DEBUG: Decoded configuration but got nil name, type: '\(type.displayName)'")
+                        print("DEBUG: Failed to decode with new type-aware method, trying old method")
+                    }
+                }
+
+                // Fallback to old method for compatibility
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    if debug {
+                        print("DEBUG: Old method decoded module name: '\(moduleName)'")
+                    }
+                    return moduleName
+                } else {
+                    if debug {
+                        print("DEBUG: Old method also failed to decode configuration")
                     }
                 }
             } else {
                 if debug {
-                    print("DEBUG: Failed to decode with new type-aware method, trying old method")
+                    print("DEBUG: Display '\(displayKey)' has no Idle configuration")
                 }
             }
-            
-            // Fallback to old method for compatibility
-            if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+
+            // Check for Linked configurations (fallback for dynamic desktop in Automatic mode)
+            if let linked = displayConfig["Linked"] as? [String: Any],
+               let content = linked["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data {
+
                 if debug {
-                    print("DEBUG: Old method decoded module name: '\(moduleName)'")
+                    print("DEBUG: Display '\(displayKey)' found Linked configuration with nested Content structure")
+                    print("DEBUG: Display '\(displayKey)' configuration data size: \(configurationData.count) bytes")
+                    if let provider = firstChoice["Provider"] as? String {
+                        print("DEBUG: Display '\(displayKey)' provider: '\(provider)'")
+                    }
                 }
-                return moduleName
-            } else {
+
+                // Handle empty configuration data for Neptune extensions (dynamic desktops)
+                if let provider = firstChoice["Provider"] as? String,
+                   provider == "com.apple.NeptuneOneExtension" && configurationData.isEmpty {
+                    if debug {
+                        print("DEBUG: Display '\(displayKey)' found Neptune extension with empty config - this is a dynamic desktop")
+                    }
+                    return "Dynamic Desktop (App Extension)"
+                }
+
+                // Use the new type-aware decoding method
+                if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                    if let screensaverName = name {
+                        if debug {
+                            print("DEBUG: Successfully decoded Linked screensaver name from display '\(displayKey)': '\(screensaverName)' type: '\(type.displayName)'")
+                        }
+                        return "\(screensaverName) (\(type.displayName))"
+                    }
+                }
+
+                // Fallback to old method for compatibility
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    if debug {
+                        print("DEBUG: Old method decoded Linked module name from display '\(displayKey)': '\(moduleName)'")
+                    }
+                    return moduleName
+                }
+            }
+
+            // Check for simple Linked configurations without nested structure
+            if let linked = displayConfig["Linked"] as? [String: Any],
+               let provider = linked["Provider"] as? String {
+
                 if debug {
-                    print("DEBUG: Old method also failed to decode configuration")
+                    print("DEBUG: Display '\(displayKey)' found simple Linked configuration with provider: '\(provider)'")
+                }
+
+                if provider == "com.apple.NeptuneOneExtension" {
+                    if debug {
+                        print("DEBUG: Display '\(displayKey)' Linked configuration is a dynamic desktop")
+                    }
+                    return "Dynamic Desktop (App Extension)"
                 }
             }
-            
-            // If all else fails, show provider info with proper type mapping
-            let fallbackResult: String
-            let fallbackType: ScreensaverType
-            
-            switch provider {
-            case "com.apple.wallpaper.choice.screen-saver":
-                fallbackResult = "Traditional Screensaver"
-                fallbackType = .traditional
-            case "com.apple.NeptuneOneExtension":
-                fallbackResult = "Neptune Extension"
-                fallbackType = .appExtension
-            case "com.apple.wallpaper.choice.sequoia":
-                fallbackResult = "Sequoia Video"
-                fallbackType = .sequoiaVideo
-            case "com.apple.wallpaper.choice.macintosh":
-                // Built-in Mac screensaver with empty config
-                fallbackResult = "Classic Mac"
-                fallbackType = .builtInMac
-                if debug {
-                    print("DEBUG: Built-in Mac screensaver detected")
-                }
-                return "\(fallbackResult) (\(fallbackType.displayName))"
-            case "default":
-                fallbackResult = "Default"
-                fallbackType = .defaultScreen
-                return "\(fallbackResult) (\(fallbackType.displayName))"
-            default:
-                fallbackResult = "Unknown (\(provider))"
-                fallbackType = .traditional
-            }
-            
-            if debug {
-                print("DEBUG: Using fallback result: '\(fallbackResult)'")
-                print("DEBUG: Continue checking other displays...")
-            }
-            
-            // For Neptune Extensions with empty config data, continue looking for other displays
-            if provider == "com.apple.NeptuneOneExtension" && configurationData.isEmpty {
-                if debug {
-                    print("DEBUG: Neptune extension with empty config, continuing...")
-                }
-                continue
-            }
-            
-            return fallbackResult
+
+            // Continue to next display if no Idle or Linked configuration found
         }
         
         if debug {

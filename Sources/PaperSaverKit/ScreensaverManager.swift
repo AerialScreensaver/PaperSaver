@@ -270,6 +270,38 @@ public class ScreensaverManager: ScreensaverManaging {
             }
         }
 
+        // Also check for Linked configurations (dynamic desktop in Automatic mode)
+        if let defaultConfig = config["Default"] as? [String: Any],
+           let linked = defaultConfig["Linked"] as? [String: Any],
+           let content = linked["Content"] as? [String: Any],
+           let choices = content["Choices"] as? [[String: Any]],
+           let firstChoice = choices.first,
+           let configurationData = firstChoice["Configuration"] as? Data {
+
+            // Use the new type-aware decoding method
+            if let (name, _) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                if let screensaverName = name {
+                    return screensaverName
+                }
+            }
+
+            // Fallback to old method for compatibility
+            if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                return moduleName
+            }
+        }
+
+        // Check for Linked configurations without nested structure
+        if let defaultConfig = config["Default"] as? [String: Any],
+           let linked = defaultConfig["Linked"] as? [String: Any],
+           let provider = linked["Provider"] as? String {
+
+            // Handle com.apple.NeptuneOneExtension directly
+            if provider == "com.apple.NeptuneOneExtension" {
+                return "Dynamic Desktop"
+            }
+        }
+
         // Fall back to Displays section (only if Default doesn't exist or fails)
         guard let displays = config["Displays"] as? [String: Any] else {
             return nil
@@ -303,6 +335,7 @@ public class ScreensaverManager: ScreensaverManaging {
 
         // Check each display for screensaver configuration
         for displayKey in displayKeysToCheck {
+            // First try Idle configuration
             if let displayConfig = displays[displayKey] as? [String: Any],
                let idle = displayConfig["Idle"] as? [String: Any],
                let content = idle["Content"] as? [String: Any],
@@ -312,6 +345,30 @@ public class ScreensaverManager: ScreensaverManaging {
 
                 if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
                     return moduleName
+                }
+            }
+
+            // Also try Linked configuration (dynamic desktop in Automatic mode)
+            if let displayConfig = displays[displayKey] as? [String: Any],
+               let linked = displayConfig["Linked"] as? [String: Any],
+               let content = linked["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data {
+
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    return moduleName
+                }
+            }
+
+            // Check for Linked configurations without nested structure
+            if let displayConfig = displays[displayKey] as? [String: Any],
+               let linked = displayConfig["Linked"] as? [String: Any],
+               let provider = linked["Provider"] as? String {
+
+                // Handle com.apple.NeptuneOneExtension directly
+                if provider == "com.apple.NeptuneOneExtension" {
+                    return "Dynamic Desktop"
                 }
             }
         }

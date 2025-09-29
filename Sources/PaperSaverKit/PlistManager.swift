@@ -209,12 +209,11 @@ public final class PlistManager: @unchecked Sendable {
             return url.deletingPathExtension().lastPathComponent
         }
         
-        // Try Neptune Extension format
+        // Try Neptune Extension format (dynamic desktop used as screensaver)
         if let values = plist["values"] as? [String: Any],
            values["legacyScreenSaverGenerationCount"] != nil {
-            // For Neptune extensions, we need to extract the name differently
-            // This is a placeholder - we'll need to refine based on actual structure
-            return "Neptune Extension"
+            // Neptune extensions are dynamic desktops used as screensavers
+            return "Dynamic Desktop"
         }
         
         // Try Sequoia video format
@@ -240,10 +239,10 @@ public final class PlistManager: @unchecked Sendable {
             return (name, type)
         }
         
-        // Try Neptune Extension format
+        // Try Neptune Extension format (dynamic desktop used as screensaver)
         if let values = plist["values"] as? [String: Any],
            values["legacyScreenSaverGenerationCount"] != nil {
-            return ("Neptune Extension", .appExtension)
+            return ("Dynamic Desktop", .appExtension)
         }
         
         // Try Sequoia video format
