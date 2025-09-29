@@ -66,9 +66,9 @@ func ensureAerialScreensaver() async {
     let paperSaver = PaperSaver()
 
     do {
-        // Check if Aerial is already active
+        // Check if Aerial is the only active screensaver system-wide
         let activeScreensavers = paperSaver.getActiveScreensavers()
-        let isAerialActive = activeScreensavers.contains("Aerial")
+        let isAerialActive = activeScreensavers == ["Aerial"]
 
         if isAerialActive {
             print("✅ Aerial screensaver is already active")
@@ -142,7 +142,7 @@ swift run papersaver list
 swift run papersaver list-spaces
 
 # Set a screensaver
-swift run papersaver set Aerial
+swift run papersaver set-saver Aerial
 ```
 
 ### Current Development Focus
