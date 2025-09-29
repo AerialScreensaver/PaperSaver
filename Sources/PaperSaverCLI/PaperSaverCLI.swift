@@ -1,5 +1,5 @@
 import Foundation
-import PaperSaver
+import PaperSaverKit
 import AppKit
 
 @main
