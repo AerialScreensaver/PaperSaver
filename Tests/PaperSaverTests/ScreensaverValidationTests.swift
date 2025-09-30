@@ -209,7 +209,6 @@ final class ScreensaverValidationTests: XCTestCase {
         // Test that we can encode/decode each type
         let testCases: [(URL, ScreensaverType, String)] = [
             (URL(string: "file:///Test.saver")!, .traditional, "Test"),
-            (URL(string: "file:///Test.qtz")!, .quartz, "Test"),
             (URL(string: "file:///Test.appex")!, .appExtension, "Test"),
         ]
         
@@ -229,7 +228,7 @@ final class ScreensaverValidationTests: XCTestCase {
             print("   Decoded name: \(result.name ?? "nil")")
             print("   Decoded type: \(result.type.displayName)")
             
-            if type == .traditional || type == .quartz {
+            if type == .traditional {
                 XCTAssertEqual(result.name, expectedName,
                               "\(type.displayName) should decode to correct name")
             }

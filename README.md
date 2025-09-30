@@ -59,18 +59,33 @@ Or add it through Xcode:
 ### Basic Example
 
 ```swift
-import PaperSaver
+import PaperSaverKit
 
-// Initialize the manager
-let paperSaver = PaperSaver()
+// Example: Ensure Aerial screensaver is active system-wide
+func ensureAerialScreensaver() async {
+    let paperSaver = PaperSaver()
 
-// Set screensaver for main display
-try await paperSaver.setScreensaver(module: "Aerial", for: .main)
+    do {
+        // Check if Aerial is the only active screensaver system-wide
+        let activeScreensavers = paperSaver.getActiveScreensavers()
+        let isAerialActive = activeScreensavers == ["Aerial"]
 
-// Get current configuration
-if let screensaver = paperSaver.getActiveScreensaver(for: .main) {
-    print("Current screensaver: \(screensaver.name)")
+        if isAerialActive {
+            print("✅ Aerial screensaver is already active")
+        } else {
+            print("Setting Aerial screensaver...")
+            try await paperSaver.setScreensaverEverywhere(module: "Aerial")
+            print("✅ Successfully set Aerial screensaver")
+        }
+    } catch PaperSaverError.screensaverNotFound {
+        print("❌ Error: Aerial screensaver not found. Please install it first.")
+    } catch {
+        print("❌ Error setting screensaver: \(error.localizedDescription)")
+    }
 }
+
+// Usage in async context
+await ensureAerialScreensaver()
 ```
 
 ### Setting Screensaver Idle Time
@@ -118,16 +133,16 @@ The project includes a command-line interface for testing and development:
 
 ```bash
 # Build and run the CLI
-swift run papersaver-cli --help
+swift run papersaver --help
 
 # List available screensavers
-swift run papersaver-cli list
+swift run papersaver list
 
 # List spaces (macOS Sonoma+)
-swift run papersaver-cli list-spaces
+swift run papersaver list-spaces
 
 # Set a screensaver
-swift run papersaver-cli set Aerial
+swift run papersaver set-saver Aerial
 ```
 
 ### Current Development Focus

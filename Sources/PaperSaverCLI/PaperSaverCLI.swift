@@ -1,5 +1,5 @@
 import Foundation
-import PaperSaver
+import PaperSaverKit
 import AppKit
 
 @main
@@ -19,32 +19,6 @@ struct PaperSaverCLI {
         case version
         case help
         
-        var description: String {
-            switch self {
-            case .list:
-                return "List all available screensavers"
-            case .get:
-                return "Get current screensaver"
-            case .idleTime:
-                return "Get or set idle time"
-            case .listSpaces:
-                return "List all spaces (Sonoma+)"
-            case .listDisplays:
-                return "List all displays with UUID mapping (Sonoma+)"
-            case .getSpace:
-                return "Get current active space (Sonoma+)"
-            case .setSaver:
-                return "Set screensaver with unified targeting options"
-            case .setPaper:
-                return "Set wallpaper with unified targeting options"
-            case .restoreBackup:
-                return "Restore wallpaper/screensaver settings from backup"
-            case .version:
-                return "Show version information"
-            case .help:
-                return "Show this help message"
-            }
-        }
     }
     
     enum OutputFormat: String {
@@ -62,7 +36,7 @@ struct PaperSaverCLI {
         
         let commandString = args[0]
         
-        if commandString == "--version" || commandString == "-v" {
+        if commandString == "--version" {
             print("papersaver version \(version)")
             exit(0)
         }
@@ -157,6 +131,7 @@ struct PaperSaverCLI {
     
     static func listScreensavers(_ paperSaver: PaperSaver, args: [String]) throws {
         let format = getOutputFormat(from: args)
+        let verbose = args.contains("--verbose") || args.contains("-v")
         let screensavers = paperSaver.listAvailableScreensavers()
         
         switch format {
@@ -180,6 +155,9 @@ struct PaperSaverCLI {
                 print("\nSystem Screensavers:")
                 for saver in systemScreensavers {
                     print("  • \(saver.name) (\(saver.type.displayName))")
+                    if verbose {
+                        print("    Path: \(saver.path.path)")
+                    }
                 }
             }
             
@@ -187,6 +165,9 @@ struct PaperSaverCLI {
                 print("\nUser Screensavers:")
                 for saver in userScreensavers {
                     print("  • \(saver.name) (\(saver.type.displayName))")
+                    if verbose {
+                        print("    Path: \(saver.path.path)")
+                    }
                 }
             }
             
@@ -233,13 +214,17 @@ struct PaperSaverCLI {
             }
         }
         
-        try await paperSaver.setScreensaver(module: name, for: screen)
-        
-        print("✅ Successfully set screensaver to: \(name)")
-        
-        if verbose {
-            print("\nNote: You may need to restart the wallpaper agent for changes to take effect:")
-            print("  killall WallpaperAgent")
+        do {
+            try await paperSaver.setScreensaver(module: name, for: screen)
+
+            print("✅ Successfully set screensaver to: \(name)")
+
+            if verbose {
+                print("\nNote: You may need to restart the wallpaper agent for changes to take effect:")
+                print("  killall WallpaperAgent")
+            }
+        } catch {
+            throw error
         }
     }
     
@@ -285,59 +270,6 @@ struct PaperSaverCLI {
         }
     }
     
-    static func handleWallpaper(_ paperSaver: PaperSaver, args: [String]) async throws {
-        guard !args.isEmpty else {
-            print("Wallpaper commands:")
-            print("  get              Get current wallpaper")
-            print("  set <path>       Set wallpaper from file path")
-            print("  list-options     List wallpaper scaling options")
-            return
-        }
-        
-        let subcommand = args[0]
-        
-        switch subcommand {
-        case "get":
-            if let screen = NSScreen.main,
-               let url = paperSaver.getCurrentWallpaper(for: screen) {
-                print("Current wallpaper: \(url.imagePath)")
-            } else {
-                print("No wallpaper currently set")
-            }
-            
-        case "set":
-            guard args.count >= 2 else {
-                printError("Error: Wallpaper path required")
-                print("Usage: papersaver wallpaper set <path> [--screen <screen-id>] [--scaling <option>]")
-                exit(1)
-            }
-            
-            let path = args[1]
-            let url = URL(fileURLWithPath: path.expandingTildeInPath)
-            
-            guard FileManager.default.fileExists(atPath: url.path) else {
-                printError("Error: File not found at path: \(path)")
-                exit(1)
-            }
-            
-            let screen = getScreen(from: args)
-            let options = WallpaperOptions()
-            
-            try await paperSaver.setWallpaper(imageURL: url, screen: screen, options: options)
-            print("✅ Successfully set wallpaper")
-            
-        case "list-options":
-            print("Wallpaper Scaling Options:")
-            print("  • fill      - Fill screen, cropping if necessary")
-            print("  • fit       - Fit entire image on screen")
-            print("  • stretch   - Stretch to fill screen")
-            print("  • center    - Center image without scaling")
-            print("  • tile      - Tile image across screen")
-            
-        default:
-            printError("Error: Unknown wallpaper subcommand '\(subcommand)'")
-        }
-    }
     
     static func formatIdleTime(_ seconds: Int) -> String {
         if seconds == 0 {
@@ -426,38 +358,84 @@ struct PaperSaverCLI {
             return nil
         }
 
-        // Check if we have a Spaces structure (multi-space configuration)
+        // Check in priority order matching macOS behavior:
+        // 1. AllSpacesAndDisplays (highest priority - what system actually uses)
+        // 2. Spaces[UUID] (medium priority - per-space configuration)
+        // 3. SystemDefault (fallback)
+        // Note: When "all spaces" mode is enabled for wallpapers, AllSpacesAndDisplays exists,
+        // but screensavers can still be per-space. We check if AllSpacesAndDisplays has valid
+        // screensaver data first, and fall back to Spaces[UUID] if it doesn't.
         var spaceConfig: [String: Any]?
 
-        if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
-            if debug {
-                print("DEBUG: Found \(spaces.keys.count) space configurations in plist")
-                print("DEBUG: Space keys available: \(spaces.keys.sorted())")
+        // Check if AllSpacesAndDisplays exists and has valid screensaver data
+        if let allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
+            var hasValidScreensaverData = false
+
+            // Check if AllSpacesAndDisplays.Idle has non-empty configuration
+            if let idle = allSpacesAndDisplays["Idle"] as? [String: Any],
+               let content = idle["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data,
+               !configurationData.isEmpty {
+                // AllSpacesAndDisplays.Idle has valid screensaver data
+                hasValidScreensaverData = true
+                if debug { print("DEBUG: AllSpacesAndDisplays.Idle has valid screensaver data") }
             }
 
-            // Try the specific space UUID first
-            if let config = spaces[lookupUUID] as? [String: Any] {
-                spaceConfig = config
-                if debug { print("DEBUG: Found exact match for UUID '\(lookupUUID)'") }
-            } else if !lookupUUID.isEmpty {
-                // If specific UUID not found and it's not empty, try empty string (default)
-                spaceConfig = spaces[""] as? [String: Any]
+            // Also check if AllSpacesAndDisplays.Linked has non-empty configuration (Automatic mode)
+            if !hasValidScreensaverData,
+               let linked = allSpacesAndDisplays["Linked"] as? [String: Any],
+               let content = linked["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data,
+               !configurationData.isEmpty {
+                // AllSpacesAndDisplays.Linked has valid screensaver data (Automatic mode)
+                hasValidScreensaverData = true
+                if debug { print("DEBUG: AllSpacesAndDisplays.Linked has valid screensaver data (Automatic mode)") }
+            }
+
+            if hasValidScreensaverData {
+                spaceConfig = allSpacesAndDisplays
+                if debug { print("DEBUG: Using AllSpacesAndDisplays configuration") }
+            } else {
+                if debug { print("DEBUG: AllSpacesAndDisplays exists but has no valid screensaver data, checking per-space config") }
+            }
+        }
+
+        // If AllSpacesAndDisplays doesn't have valid screensaver data, check Spaces for per-space config
+        if spaceConfig == nil {
+            if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
                 if debug {
-                    if spaceConfig != nil {
-                        print("DEBUG: UUID '\(lookupUUID)' not found, using default space configuration")
-                    } else {
-                        print("DEBUG: UUID '\(lookupUUID)' not found, and no default configuration available")
+                    print("DEBUG: Found \(spaces.keys.count) space configurations in plist")
+                    print("DEBUG: Space keys available: \(spaces.keys.sorted())")
+                }
+
+                // Try the specific space UUID first
+                if let config = spaces[lookupUUID] as? [String: Any] {
+                    spaceConfig = config
+                    if debug { print("DEBUG: Found exact match for UUID '\(lookupUUID)'") }
+                } else if !lookupUUID.isEmpty {
+                    // If specific UUID not found and it's not empty, try empty string (default)
+                    spaceConfig = spaces[""] as? [String: Any]
+                    if debug {
+                        if spaceConfig != nil {
+                            print("DEBUG: UUID '\(lookupUUID)' not found, using default space configuration")
+                        } else {
+                            print("DEBUG: UUID '\(lookupUUID)' not found, and no default configuration available")
+                        }
                     }
                 }
             }
-        } else if let allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
-            // Handle single screen/space configuration with AllSpacesAndDisplays (takes precedence)
-            if debug { print("DEBUG: No Spaces configurations found, using AllSpacesAndDisplays configuration") }
-            spaceConfig = allSpacesAndDisplays
-        } else if let systemDefault = plist["SystemDefault"] as? [String: Any] {
-            // Handle single screen/space configuration with SystemDefault (fallback)
-            if debug { print("DEBUG: No Spaces or AllSpacesAndDisplays found, using SystemDefault configuration") }
-            spaceConfig = systemDefault
+        }
+
+        // Final fallback to SystemDefault
+        if spaceConfig == nil {
+            if let systemDefault = plist["SystemDefault"] as? [String: Any] {
+                if debug { print("DEBUG: Using SystemDefault configuration (lowest priority)") }
+                spaceConfig = systemDefault
+            }
         }
 
         guard let config = spaceConfig else {
@@ -499,44 +477,184 @@ struct PaperSaverCLI {
             }
         }
 
+        // Check if Linked is directly in config (SystemDefault or AllSpacesAndDisplays in Automatic mode)
+        if let linked = config["Linked"] as? [String: Any],
+           let content = linked["Content"] as? [String: Any],
+           let choices = content["Choices"] as? [[String: Any]],
+           let firstChoice = choices.first {
+
+            if debug {
+                print("DEBUG: Using direct Linked configuration")
+            }
+
+            // Check the Provider to determine if this is Automatic mode (wallpaper as screensaver)
+            if let provider = firstChoice["Provider"] as? String {
+                if debug {
+                    print("DEBUG: Linked provider: '\(provider)'")
+                }
+
+                // In Automatic mode, the provider is a wallpaper provider, not a screensaver
+                if provider == "com.apple.wallpaper.choice.image" ||
+                   provider == "com.apple.wallpaper.choice.dynamic" ||
+                   provider.starts(with: "com.apple.wallpaper.") {
+                    if debug {
+                        print("DEBUG: Detected Automatic mode (wallpaper as screensaver)")
+                    }
+                    return "Automatic (uses wallpaper)"
+                }
+            }
+
+            // If it's not Automatic mode, try to decode as screensaver
+            if let configurationData = firstChoice["Configuration"] as? Data {
+                // Use the new type-aware decoding method
+                if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                    if let screensaverName = name {
+                        if debug {
+                            print("DEBUG: Successfully decoded screensaver name from Linked: '\(screensaverName)' type: '\(type.displayName)'")
+                        }
+                        return "\(screensaverName) (\(type.displayName))"
+                    }
+                }
+
+                // Fallback to old method for compatibility
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    if debug {
+                        print("DEBUG: Old method decoded module name from Linked: '\(moduleName)'")
+                    }
+                    return moduleName
+                }
+            }
+        }
+
         // For ALL spaces, prioritize Default -> Idle over Displays
         // This ensures consistent behavior regardless of UUID
         if debug {
             print("DEBUG: Checking for Default section for space UUID '\(spaceUUID)'")
             if let defaultConfig = config["Default"] as? [String: Any] {
                 print("DEBUG: Found Default config")
-                if let idle = defaultConfig["Idle"] as? [String: Any] {
+                if defaultConfig["Idle"] is [String: Any] {
                     print("DEBUG: Found Idle in Default")
+                }
+                if defaultConfig["Linked"] is [String: Any] {
+                    print("DEBUG: Found Linked in Default")
+                }
+            } else {
+                print("DEBUG: No Default section found")
+            }
+        }
+
+        // Check for Default -> Idle configuration FIRST (explicit screensaver settings take precedence)
+        if let defaultConfig = config["Default"] as? [String: Any] {
+            if debug {
+                print("DEBUG: Checking Default -> Idle for space UUID '\(spaceUUID)'")
+                if defaultConfig["Idle"] != nil {
+                    print("DEBUG: Found Idle in Default section")
+                } else {
+                    print("DEBUG: No Idle found in Default section")
+                }
+            }
+
+            if let idle = defaultConfig["Idle"] as? [String: Any],
+               let content = idle["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data {
+
+                if debug {
+                    print("DEBUG: Using Default -> Idle configuration for space UUID '\(spaceUUID)' (takes precedence over Linked)")
+                }
+
+                // Use the new type-aware decoding method
+                if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                    if let screensaverName = name {
+                        if debug {
+                            print("DEBUG: Successfully decoded screensaver name from Default: '\(screensaverName)' type: '\(type.displayName)'")
+                        }
+                        return "\(screensaverName) (\(type.displayName))"
+                    }
+                }
+
+                // Fallback to old method for compatibility
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    if debug {
+                        print("DEBUG: Old method decoded module name from Default: '\(moduleName)'")
+                    }
+                    return moduleName
                 }
             }
         }
+
+        // Check for Linked configurations in Default section (fallback for dynamic desktop in Automatic mode)
         if let defaultConfig = config["Default"] as? [String: Any],
-           let idle = defaultConfig["Idle"] as? [String: Any],
-           let content = idle["Content"] as? [String: Any],
+           let linked = defaultConfig["Linked"] as? [String: Any],
+           let content = linked["Content"] as? [String: Any],
            let choices = content["Choices"] as? [[String: Any]],
            let firstChoice = choices.first,
            let configurationData = firstChoice["Configuration"] as? Data {
 
             if debug {
-                print("DEBUG: Using Default -> Idle configuration for space UUID '\(spaceUUID)'")
+                print("DEBUG: Found Linked configuration with nested Content structure in Default")
+                print("DEBUG: Configuration data size: \(configurationData.count) bytes")
+                print("DEBUG: First choice keys: \(firstChoice.keys.sorted())")
+                if let provider = firstChoice["Provider"] as? String {
+                    print("DEBUG: Provider: '\(provider)'")
+                }
+            }
+
+            // Handle empty configuration data for Neptune extensions (dynamic desktops)
+            if let provider = firstChoice["Provider"] as? String,
+               provider == "com.apple.NeptuneOneExtension" && configurationData.isEmpty {
+                if debug {
+                    print("DEBUG: Found Neptune extension with empty config - this is a dynamic desktop")
+                }
+                return "Dynamic Desktop (App Extension)"
             }
 
             // Use the new type-aware decoding method
             if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
                 if let screensaverName = name {
                     if debug {
-                        print("DEBUG: Successfully decoded screensaver name from Default: '\(screensaverName)' type: '\(type.displayName)'")
+                        print("DEBUG: Successfully decoded Linked screensaver name from Default: '\(screensaverName)' type: '\(type.displayName)'")
                     }
                     return "\(screensaverName) (\(type.displayName))"
+                } else {
+                    if debug {
+                        print("DEBUG: Type-aware method returned nil name for type: '\(type.displayName)'")
+                    }
+                }
+            } else {
+                if debug {
+                    print("DEBUG: Type-aware decoding failed for Linked configuration")
                 }
             }
 
             // Fallback to old method for compatibility
             if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
                 if debug {
-                    print("DEBUG: Old method decoded module name from Default: '\(moduleName)'")
+                    print("DEBUG: Old method decoded Linked module name from Default: '\(moduleName)'")
                 }
                 return moduleName
+            } else {
+                if debug {
+                    print("DEBUG: Old method also failed to decode Linked configuration")
+                }
+            }
+        }
+
+        // Check for simple Linked configurations without nested structure
+        if let defaultConfig = config["Default"] as? [String: Any],
+           let linked = defaultConfig["Linked"] as? [String: Any],
+           let provider = linked["Provider"] as? String {
+
+            if debug {
+                print("DEBUG: Found simple Linked configuration in Default with provider: '\(provider)'")
+            }
+
+            if provider == "com.apple.NeptuneOneExtension" {
+                if debug {
+                    print("DEBUG: Linked configuration is a dynamic desktop")
+                }
+                return "Dynamic Desktop (App Extension)"
             }
         }
 
@@ -615,136 +733,121 @@ struct PaperSaverCLI {
             if debug {
                 print("DEBUG: Display '\(displayKey)' config keys: \(displayConfig.keys.sorted())")
             }
-            
-            guard let idle = displayConfig["Idle"] as? [String: Any] else {
-                if debug { print("DEBUG: Display '\(displayKey)' has no Idle configuration") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' Idle keys: \(idle.keys.sorted())")
-            }
-            
-            guard let content = idle["Content"] as? [String: Any] else {
-                if debug { print("DEBUG: Display '\(displayKey)' Idle has no Content") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' Content keys: \(content.keys.sorted())")
-            }
-            
-            guard let choices = content["Choices"] as? [[String: Any]] else {
-                if debug { print("DEBUG: Display '\(displayKey)' Content has no Choices array") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' has \(choices.count) choice(s)")
-            }
-            
-            guard let firstChoice = choices.first else {
-                if debug { print("DEBUG: Display '\(displayKey)' has empty Choices array") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' first choice keys: \(firstChoice.keys.sorted())")
-            }
-            
-            guard let provider = firstChoice["Provider"] as? String else {
-                if debug { print("DEBUG: Display '\(displayKey)' first choice has no Provider") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' provider: '\(provider)'")
-            }
-            
-            guard let configurationData = firstChoice["Configuration"] as? Data else {
-                if debug { print("DEBUG: Display '\(displayKey)' first choice has no Configuration data") }
-                continue
-            }
-            
-            if debug {
-                print("DEBUG: Display '\(displayKey)' configuration data size: \(configurationData.count) bytes")
-            }
-            
-            // Use the new type-aware decoding method
-            if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
-                if let screensaverName = name {
-                    if debug {
-                        print("DEBUG: Successfully decoded screensaver name: '\(screensaverName)' type: '\(type.displayName)'")
+
+            // Check for Idle configurations FIRST (explicit screensaver settings take precedence)
+            if let idle = displayConfig["Idle"] as? [String: Any],
+               let content = idle["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data {
+
+                if debug {
+                    print("DEBUG: Display '\(displayKey)' Idle keys: \(idle.keys.sorted())")
+                    print("DEBUG: Display '\(displayKey)' Content keys: \(content.keys.sorted())")
+                    print("DEBUG: Display '\(displayKey)' has \(choices.count) choice(s)")
+                    print("DEBUG: Display '\(displayKey)' first choice keys: \(firstChoice.keys.sorted())")
+
+                    if let provider = firstChoice["Provider"] as? String {
+                        print("DEBUG: Display '\(displayKey)' provider: '\(provider)'")
                     }
-                    return "\(screensaverName) (\(type.displayName))"
+                    print("DEBUG: Display '\(displayKey)' configuration data size: \(configurationData.count) bytes")
+                }
+
+                // Use the new type-aware decoding method
+                if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                    if let screensaverName = name {
+                        if debug {
+                            print("DEBUG: Successfully decoded screensaver name: '\(screensaverName)' type: '\(type.displayName)'")
+                        }
+                        return "\(screensaverName) (\(type.displayName))"
+                    } else {
+                        if debug {
+                            print("DEBUG: Decoded configuration but got nil name, type: '\(type.displayName)'")
+                        }
+                    }
                 } else {
                     if debug {
-                        print("DEBUG: Decoded configuration but got nil name, type: '\(type.displayName)'")
+                        print("DEBUG: Failed to decode with new type-aware method, trying old method")
+                    }
+                }
+
+                // Fallback to old method for compatibility
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    if debug {
+                        print("DEBUG: Old method decoded module name: '\(moduleName)'")
+                    }
+                    return moduleName
+                } else {
+                    if debug {
+                        print("DEBUG: Old method also failed to decode configuration")
                     }
                 }
             } else {
                 if debug {
-                    print("DEBUG: Failed to decode with new type-aware method, trying old method")
+                    print("DEBUG: Display '\(displayKey)' has no Idle configuration")
                 }
             }
-            
-            // Fallback to old method for compatibility
-            if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+
+            // Check for Linked configurations (fallback for dynamic desktop in Automatic mode)
+            if let linked = displayConfig["Linked"] as? [String: Any],
+               let content = linked["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data {
+
                 if debug {
-                    print("DEBUG: Old method decoded module name: '\(moduleName)'")
+                    print("DEBUG: Display '\(displayKey)' found Linked configuration with nested Content structure")
+                    print("DEBUG: Display '\(displayKey)' configuration data size: \(configurationData.count) bytes")
+                    if let provider = firstChoice["Provider"] as? String {
+                        print("DEBUG: Display '\(displayKey)' provider: '\(provider)'")
+                    }
                 }
-                return moduleName
-            } else {
+
+                // Handle empty configuration data for Neptune extensions (dynamic desktops)
+                if let provider = firstChoice["Provider"] as? String,
+                   provider == "com.apple.NeptuneOneExtension" && configurationData.isEmpty {
+                    if debug {
+                        print("DEBUG: Display '\(displayKey)' found Neptune extension with empty config - this is a dynamic desktop")
+                    }
+                    return "Dynamic Desktop (App Extension)"
+                }
+
+                // Use the new type-aware decoding method
+                if let (name, type) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                    if let screensaverName = name {
+                        if debug {
+                            print("DEBUG: Successfully decoded Linked screensaver name from display '\(displayKey)': '\(screensaverName)' type: '\(type.displayName)'")
+                        }
+                        return "\(screensaverName) (\(type.displayName))"
+                    }
+                }
+
+                // Fallback to old method for compatibility
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    if debug {
+                        print("DEBUG: Old method decoded Linked module name from display '\(displayKey)': '\(moduleName)'")
+                    }
+                    return moduleName
+                }
+            }
+
+            // Check for simple Linked configurations without nested structure
+            if let linked = displayConfig["Linked"] as? [String: Any],
+               let provider = linked["Provider"] as? String {
+
                 if debug {
-                    print("DEBUG: Old method also failed to decode configuration")
+                    print("DEBUG: Display '\(displayKey)' found simple Linked configuration with provider: '\(provider)'")
+                }
+
+                if provider == "com.apple.NeptuneOneExtension" {
+                    if debug {
+                        print("DEBUG: Display '\(displayKey)' Linked configuration is a dynamic desktop")
+                    }
+                    return "Dynamic Desktop (App Extension)"
                 }
             }
-            
-            // If all else fails, show provider info with proper type mapping
-            let fallbackResult: String
-            let fallbackType: ScreensaverType
-            
-            switch provider {
-            case "com.apple.wallpaper.choice.screen-saver":
-                fallbackResult = "Traditional Screensaver"
-                fallbackType = .traditional
-            case "com.apple.NeptuneOneExtension":
-                fallbackResult = "Neptune Extension"
-                fallbackType = .appExtension
-            case "com.apple.wallpaper.choice.sequoia":
-                fallbackResult = "Sequoia Video"
-                fallbackType = .sequoiaVideo
-            case "com.apple.wallpaper.choice.macintosh":
-                // Built-in Mac screensaver with empty config
-                fallbackResult = "Classic Mac"
-                fallbackType = .builtInMac
-                if debug {
-                    print("DEBUG: Built-in Mac screensaver detected")
-                }
-                return "\(fallbackResult) (\(fallbackType.displayName))"
-            case "default":
-                fallbackResult = "Default"
-                fallbackType = .defaultScreen
-                return "\(fallbackResult) (\(fallbackType.displayName))"
-            default:
-                fallbackResult = "Unknown (\(provider))"
-                fallbackType = .traditional
-            }
-            
-            if debug {
-                print("DEBUG: Using fallback result: '\(fallbackResult)'")
-                print("DEBUG: Continue checking other displays...")
-            }
-            
-            // For Neptune Extensions with empty config data, continue looking for other displays
-            if provider == "com.apple.NeptuneOneExtension" && configurationData.isEmpty {
-                if debug {
-                    print("DEBUG: Neptune extension with empty config, continuing...")
-                }
-                continue
-            }
-            
-            return fallbackResult
+
+            // Continue to next display if no Idle or Linked configuration found
         }
         
         if debug {
@@ -754,7 +857,7 @@ struct PaperSaverCLI {
     }
     
     @available(macOS 14.0, *)
-    static func getWallpaperForSpace(_ paperSaver: PaperSaver, spaceUUID: String, debug: Bool = false) -> String? {
+    static func getWallpaperForSpace(spaceUUID: String, debug: Bool = false) -> String? {
         let plistManager = PlistManager.shared
         let indexPath = SystemPaths.wallpaperIndexPath
         
@@ -813,24 +916,38 @@ struct PaperSaverCLI {
         // For non-empty UUIDs, also use Default → Desktop (as they don't have Displays sections)
         // Look for wallpaper in Default → Desktop → Content → Choices
 
-        // First check if Desktop is directly in config (SystemDefault case)
-        var desktop: [String: Any]?
+        // Check for wallpaper configuration in Desktop or Linked sections
+        var wallpaperConfig: [String: Any]?
         var provider: String?
         var firstChoice: [String: Any]?
 
+        // First check if Desktop is directly in config (SystemDefault case)
         if let systemDesktop = config["Desktop"] as? [String: Any] {
             // SystemDefault case - Desktop is directly in config
-            desktop = systemDesktop
+            wallpaperConfig = systemDesktop
             if debug { print("DEBUG: Found Desktop directly in config (SystemDefault)") }
-        } else if let defaultConfig = config["Default"] as? [String: Any],
+        }
+        // Check if Desktop is under Default (Spaces case)
+        else if let defaultConfig = config["Default"] as? [String: Any],
                   let defaultDesktop = defaultConfig["Desktop"] as? [String: Any] {
             // Spaces case - Desktop is under Default
-            desktop = defaultDesktop
+            wallpaperConfig = defaultDesktop
             if debug { print("DEBUG: Found Desktop under Default section") }
         }
+        // Fallback: Check if Linked is directly in config (Automatic mode with AllSpacesAndDisplays or SystemDefault)
+        else if let systemLinked = config["Linked"] as? [String: Any] {
+            wallpaperConfig = systemLinked
+            if debug { print("DEBUG: Found Linked directly in config (Automatic mode)") }
+        }
+        // Fallback: Check if Linked is under Default (Automatic mode with Spaces)
+        else if let defaultConfig = config["Default"] as? [String: Any],
+                  let defaultLinked = defaultConfig["Linked"] as? [String: Any] {
+            wallpaperConfig = defaultLinked
+            if debug { print("DEBUG: Found Linked under Default section (Automatic mode)") }
+        }
 
-        guard let desktopConfig = desktop,
-              let content = desktopConfig["Content"] as? [String: Any],
+        guard let wallpaperConfiguration = wallpaperConfig,
+              let content = wallpaperConfiguration["Content"] as? [String: Any],
               let choices = content["Choices"] as? [[String: Any]],
               let choice = choices.first else {
             if debug { print("DEBUG: No valid wallpaper configuration found in space") }
@@ -936,7 +1053,7 @@ struct PaperSaverCLI {
                 print("  \(spaceColor)Space \(spaceNumber)\(reset): Desktop \(spaceNumber) \(uuidDisplay)\(currentMarker)")
                 
                 // Get wallpaper for this space
-                let wallpaperInfo = getWallpaperForSpace(paperSaver, spaceUUID: spaceUUID, debug: debug) ?? "None"
+                let wallpaperInfo = getWallpaperForSpace(spaceUUID: spaceUUID, debug: debug) ?? "None"
                 print("    └─ \(wallpaperColor)Wallpaper\(reset): \(wallpaperInfo)")
                 
                 // Get screensaver for this space
@@ -1309,7 +1426,7 @@ struct PaperSaverCLI {
             get-space               Get current active space
             
             help, --help, -h        Show this help message
-            version, --version, -v  Show version information
+            version, --version      Show version information
         
         TARGETING OPTIONS (for set-saver and set-paper):
             --display <number>      Target specific display by number (1, 2, 3...)
@@ -1362,11 +1479,6 @@ extension String {
     }
 }
 
-extension String {
-    var expandingTildeInPath: String {
-        return NSString(string: self).expandingTildeInPath
-    }
-}
 
 // MARK: - Unified Command Support
 extension PaperSaverCLI {
@@ -1433,7 +1545,35 @@ extension PaperSaverCLI {
         let options = parseTargetingOptions(from: args)
         
         if options.isEverywhere {
-            try await setScreensaver(paperSaver, name: screensaverName, args: [])
+            let verbose = args.contains("--verbose") || args.contains("-v")
+            let noRestart = args.contains("--no-restart")
+            let debugRollback = args.contains("--debug-rollback")
+
+            if verbose {
+                print("Setting screensaver to '\(screensaverName)'...")
+                print("Target: All screens and spaces")
+                if noRestart {
+                    print("Using --no-restart: skipping WallpaperAgent restart and auto-rollback")
+                }
+                if debugRollback {
+                    print("Debug mode enabled: detailed rollback logging active")
+                }
+            }
+
+            do {
+                try await paperSaver.setScreensaverEverywhere(module: screensaverName, skipRestart: noRestart, enableDebug: debugRollback)
+
+                print("✅ Successfully set screensaver to: \(screensaverName)")
+
+                if verbose && !noRestart && !debugRollback {
+                    print("\nAuto-rollback protection is active - will revert if WallpaperAgent corrupts settings")
+                } else if verbose && noRestart {
+                    print("\nNote: You may need to restart the wallpaper agent manually for changes to take effect:")
+                    print("  killall WallpaperAgent")
+                }
+            } catch {
+                throw error
+            }
         } else if options.hasDisplayTarget && options.hasSpaceTarget {
             if #available(macOS 14.0, *) {
                 if let displayNumber = options.displayNumber, let spaceNumber = options.spaceNumber {
@@ -1484,18 +1624,26 @@ extension PaperSaverCLI {
         let wallpaperOptions = WallpaperOptions()
         
         if options.isEverywhere {
-            try await paperSaver.setWallpaperEverywhere(imageURL: imageURL, options: wallpaperOptions)
-            print("✅ Successfully set wallpaper everywhere")
+            do {
+                try await paperSaver.setWallpaperEverywhere(imageURL: imageURL, options: wallpaperOptions)
+                print("✅ Successfully set wallpaper everywhere")
+            } catch {
+                throw error
+            }
         } else if options.hasDisplayTarget && options.hasSpaceTarget {
             if #available(macOS 14.0, *) {
                 if let displayNumber = options.displayNumber, let spaceNumber = options.spaceNumber {
-                    try await paperSaver.setWallpaperForDisplaySpace(
-                        imageURL: imageURL,
-                        displayNumber: displayNumber,
-                        spaceNumber: spaceNumber,
-                        options: wallpaperOptions
-                    )
-                    print("✅ Successfully set wallpaper for display \(displayNumber) space \(spaceNumber)")
+                    do {
+                        try await paperSaver.setWallpaperForDisplaySpace(
+                            imageURL: imageURL,
+                            displayNumber: displayNumber,
+                            spaceNumber: spaceNumber,
+                            options: wallpaperOptions
+                        )
+                        print("✅ Successfully set wallpaper for display \(displayNumber) space \(spaceNumber)")
+                    } catch {
+                        throw error
+                    }
                 } else {
                     throw PaperSaverError.invalidConfiguration("Invalid display/space combination")
                 }
@@ -1506,12 +1654,16 @@ extension PaperSaverCLI {
         } else if options.hasDisplayTarget {
             if #available(macOS 14.0, *) {
                 if let displayNumber = options.displayNumber {
-                    try await paperSaver.setWallpaperForDisplay(
-                        imageURL: imageURL,
-                        displayNumber: displayNumber,
-                        options: wallpaperOptions
-                    )
-                    print("✅ Successfully set wallpaper for display \(displayNumber)")
+                    do {
+                        try await paperSaver.setWallpaperForDisplay(
+                            imageURL: imageURL,
+                            displayNumber: displayNumber,
+                            options: wallpaperOptions
+                        )
+                        print("✅ Successfully set wallpaper for display \(displayNumber)")
+                    } catch {
+                        throw error
+                    }
                 } else {
                     throw PaperSaverError.invalidConfiguration("Invalid display number")
                 }
@@ -1522,13 +1674,17 @@ extension PaperSaverCLI {
         } else if options.hasSpaceTarget {
             if #available(macOS 14.0, *) {
                 if let spaceUUID = options.spaceUUID {
-                    try await paperSaver.setWallpaperForSpace(
-                        imageURL: imageURL,
-                        spaceUUID: spaceUUID,
-                        screen: nil,
-                        options: wallpaperOptions
-                    )
-                    print("✅ Successfully set wallpaper for space \(spaceUUID)")
+                    do {
+                        try await paperSaver.setWallpaperForSpace(
+                            imageURL: imageURL,
+                            spaceUUID: spaceUUID,
+                            screen: nil,
+                            options: wallpaperOptions
+                        )
+                        print("✅ Successfully set wallpaper for space \(spaceUUID)")
+                    } catch {
+                        throw error
+                    }
                 } else {
                     throw PaperSaverError.invalidConfiguration("Invalid space identifier")
                 }
@@ -1537,8 +1693,12 @@ extension PaperSaverCLI {
                 exit(1)
             }
         } else {
-            try await paperSaver.setWallpaperEverywhere(imageURL: imageURL, options: wallpaperOptions)
-            print("✅ Successfully set wallpaper")
+            do {
+                try await paperSaver.setWallpaperEverywhere(imageURL: imageURL, options: wallpaperOptions)
+                print("✅ Successfully set wallpaper")
+            } catch {
+                throw error
+            }
         }
     }
 }

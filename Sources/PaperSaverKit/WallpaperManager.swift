@@ -22,7 +22,6 @@ public protocol WallpaperManaging {
 
 public class WallpaperManager: WallpaperManaging {
     private let plistManager = PlistManager.shared
-    private let configManager = ConfigurationManager()
     private let screensaverManager = ScreensaverManager()
     
     public init() {}
@@ -42,8 +41,8 @@ public class WallpaperManager: WallpaperManaging {
     public func getCurrentWallpaper(for screen: NSScreen?) -> WallpaperInfo? {
         if #available(macOS 14.0, *) {
             // Use the same Spaces structure approach as other functions
-            guard let spaceTree = (screensaverManager as? SpaceManaging)?.getNativeSpaceTree(),
-                  let monitors = spaceTree["monitors"] as? [[String: Any]] else {
+            let spaceTree = screensaverManager.getNativeSpaceTree()
+            guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
                 return nil
             }
 
@@ -194,7 +193,7 @@ public class WallpaperManager: WallpaperManaging {
             throw PaperSaverError.fileNotFound(imageURL)
         }
         
-        guard let spaceInfo = (screensaverManager as? SpaceManaging)?.getSpaceByID(spaceID) else {
+        guard let spaceInfo = screensaverManager.getSpaceByID(spaceID) else {
             throw PaperSaverError.spaceNotFound
         }
         
@@ -231,6 +230,8 @@ public class WallpaperManager: WallpaperManaging {
            let screenID = ScreenIdentifier(from: screen) {
             let displayKey = screenID.displayID.description
             var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
+            // Filter out invalid display keys (like "Main") to prevent plist corruption
+            spaceDisplays = filterValidDisplayKeys(spaceDisplays)
             var displayConfig = spaceDisplays[displayKey] as? [String: Any] ?? ["Type": "individual"]
             displayConfig["Desktop"] = createDesktopConfiguration(with: configurationData, options: optionsData)
             spaceDisplays[displayKey] = displayConfig
@@ -245,7 +246,7 @@ public class WallpaperManager: WallpaperManaging {
         plist["Spaces"] = spaces
         
         try plistManager.write(plist, to: indexPath)
-        configManager.restartWallpaperAgent()
+        restartWallpaperAgent()
     }
     
     public func setWallpaperEverywhere(imageURL: URL, options: WallpaperOptions = .default) async throws {
@@ -254,7 +255,7 @@ public class WallpaperManager: WallpaperManaging {
         }
         
         if #available(macOS 14.0, *) {
-            let spaceTree = (screensaverManager as? SpaceManaging)?.getNativeSpaceTree() ?? [:]
+            let spaceTree = screensaverManager.getNativeSpaceTree()
             
             guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
                 try await setWallpaper(imageURL: imageURL, screen: nil, options: options)
@@ -292,7 +293,7 @@ public class WallpaperManager: WallpaperManaging {
         let configurationData = try plistManager.createWallpaperConfiguration(imageURL: imageURL)
         let optionsData = try plistManager.createWallpaperOptions(style: options.style)
         
-        let spaceTree = (screensaverManager as? SpaceManaging)?.getNativeSpaceTree() ?? [:]
+        let spaceTree = screensaverManager.getNativeSpaceTree()
         
         guard let monitors = spaceTree["monitors"] as? [[String: Any]] else {
             throw PaperSaverError.displayNotFound(displayNumber)
@@ -329,6 +330,8 @@ public class WallpaperManager: WallpaperManaging {
 
                     // Also write to Displays section for backward compatibility
                     var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
+                    // Filter out invalid display keys (like "Main") to prevent plist corruption
+                    spaceDisplays = filterValidDisplayKeys(spaceDisplays)
                     var spaceDisplayConfig = spaceDisplays[displayUUID] as? [String: Any] ?? ["Type": "individual"]
                     spaceDisplayConfig["Desktop"] = createDesktopConfiguration(with: configurationData, options: optionsData)
                     spaceDisplays[displayUUID] = spaceDisplayConfig
@@ -342,7 +345,7 @@ public class WallpaperManager: WallpaperManaging {
         }
         
         try plistManager.write(plist, to: indexPath)
-        configManager.restartWallpaperAgent()
+        restartWallpaperAgent()
     }
     
     @available(macOS 14.0, *)
@@ -351,7 +354,7 @@ public class WallpaperManager: WallpaperManaging {
             throw PaperSaverError.fileNotFound(imageURL)
         }
         
-        guard let spaceUUID = (screensaverManager as? SpaceManaging)?.getSpaceUUID(displayNumber: displayNumber, spaceNumber: spaceNumber) else {
+        guard let spaceUUID = screensaverManager.getSpaceUUID(displayNumber: displayNumber, spaceNumber: spaceNumber) else {
             throw PaperSaverError.spaceNotFound
         }
         
@@ -361,7 +364,7 @@ public class WallpaperManager: WallpaperManaging {
     }
     
     private func createDesktopConfiguration(with configurationData: Data, options: Data) -> [String: Any] {
-        var content: [String: Any] = [
+        let content: [String: Any] = [
             "Choices": [
                 [
                     "Configuration": configurationData,
@@ -371,10 +374,10 @@ public class WallpaperManager: WallpaperManaging {
             ],
             "EncodedOptionValues": options
         ]
-        
+
         // Don't add Shuffle key at all to avoid NSNull issues
         // The system will handle the default value
-        
+
         return [
             "Content": content,
             "LastSet": Date(),
@@ -403,5 +406,29 @@ public class WallpaperManager: WallpaperManaging {
         }
         
         return nil
+    }
+
+    private func restartWallpaperAgent() {
+        let task = Process()
+        task.launchPath = "/usr/bin/killall"
+        task.arguments = ["WallpaperAgent"]
+        task.launch()
+    }
+
+    private func isValidDisplayKey(_ key: String) -> Bool {
+        // Valid display keys are UUIDs in format XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+        // Invalid keys include "Main", numeric strings, or other non-UUID formats
+        let uuidPattern = "^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$"
+        let regex = try? NSRegularExpression(pattern: uuidPattern, options: [.caseInsensitive])
+        let range = NSRange(location: 0, length: key.count)
+        return regex?.firstMatch(in: key, options: [], range: range) != nil
+    }
+
+    /// Filters a Displays dictionary to keep only valid UUID-format display keys
+    /// Removes invalid keys like "Main", numeric strings, or other non-UUID formats
+    private func filterValidDisplayKeys(_ displays: [String: Any]) -> [String: Any] {
+        return displays.filter { key, _ in
+            isValidDisplayKey(key)
+        }
     }
 }
