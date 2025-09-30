@@ -1136,6 +1136,10 @@ public class ScreensaverManager: ScreensaverManaging {
                         }
                         print("🔧 Auto-rolling back...")
                         try plistManager.restore(backupAt: path + ".backup", to: path)
+                        if enableDebug {
+                            print("🔧 DEBUG: Restarting WallpaperAgent after rollback...")
+                        }
+                        restartWallpaperAgent()
                         print("✅ Auto-rollback completed successfully")
                     } else if enableDebug {
                         print("🔧 DEBUG: Semantic verification passed - screensaver correctly applied")
@@ -1147,6 +1151,10 @@ public class ScreensaverManager: ScreensaverManaging {
                     }
                     print("🔧 Auto-rolling back...")
                     try plistManager.restore(backupAt: path + ".backup", to: path)
+                    if enableDebug {
+                        print("🔧 DEBUG: Restarting WallpaperAgent after rollback...")
+                    }
+                    restartWallpaperAgent()
                     print("✅ Auto-rollback completed successfully")
                 }
             } else if enableDebug {
