@@ -204,24 +204,63 @@ public class ScreensaverManager: ScreensaverManaging {
 
         // Check in priority order matching macOS behavior:
         // 1. AllSpacesAndDisplays (highest priority - what system actually uses)
-        // 2. Spaces[UUID] (medium priority)
+        // 2. Spaces[UUID] (medium priority - per-space configuration)
         // 3. SystemDefault (fallback)
+        // Note: When "all spaces" mode is enabled for wallpapers, AllSpacesAndDisplays exists,
+        // but screensavers can still be per-space. We check if AllSpacesAndDisplays has valid
+        // screensaver data first, and fall back to Spaces[UUID] if it doesn't.
         var spaceConfig: [String: Any]?
 
-        // First check AllSpacesAndDisplays - this takes precedence in macOS
+        // Check if AllSpacesAndDisplays exists and has valid screensaver data
         if let allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
-            spaceConfig = allSpacesAndDisplays
-        } else if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
-            // Then check Spaces structure (multi-space configuration)
-            if let config = spaces[lookupUUID] as? [String: Any] {
-                spaceConfig = config
-            } else if !lookupUUID.isEmpty {
-                // If specific UUID not found and it's not empty, try empty string (default)
-                spaceConfig = spaces[""] as? [String: Any]
+            var hasValidScreensaverData = false
+
+            // Check if AllSpacesAndDisplays.Idle has non-empty configuration
+            if let idle = allSpacesAndDisplays["Idle"] as? [String: Any],
+               let content = idle["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data,
+               !configurationData.isEmpty {
+                // AllSpacesAndDisplays.Idle has valid screensaver data
+                hasValidScreensaverData = true
             }
-        } else if let systemDefault = plist["SystemDefault"] as? [String: Any] {
-            // Finally fall back to SystemDefault
-            spaceConfig = systemDefault
+
+            // Also check if AllSpacesAndDisplays.Linked has non-empty configuration (Automatic mode)
+            if !hasValidScreensaverData,
+               let linked = allSpacesAndDisplays["Linked"] as? [String: Any],
+               let content = linked["Content"] as? [String: Any],
+               let choices = content["Choices"] as? [[String: Any]],
+               let firstChoice = choices.first,
+               let configurationData = firstChoice["Configuration"] as? Data,
+               !configurationData.isEmpty {
+                // AllSpacesAndDisplays.Linked has valid screensaver data (Automatic mode)
+                hasValidScreensaverData = true
+            }
+
+            if hasValidScreensaverData {
+                spaceConfig = allSpacesAndDisplays
+            }
+        }
+
+        // If AllSpacesAndDisplays doesn't have valid screensaver data, check Spaces for per-space config
+        if spaceConfig == nil {
+            if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
+                // Then check Spaces structure (multi-space configuration)
+                if let config = spaces[lookupUUID] as? [String: Any] {
+                    spaceConfig = config
+                } else if !lookupUUID.isEmpty {
+                    // If specific UUID not found and it's not empty, try empty string (default)
+                    spaceConfig = spaces[""] as? [String: Any]
+                }
+            }
+        }
+
+        // Final fallback to SystemDefault
+        if spaceConfig == nil {
+            if let systemDefault = plist["SystemDefault"] as? [String: Any] {
+                spaceConfig = systemDefault
+            }
         }
 
         guard let config = spaceConfig else {
@@ -245,6 +284,38 @@ public class ScreensaverManager: ScreensaverManaging {
             // Fallback to old method for compatibility
             if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
                 return moduleName
+            }
+        }
+
+        // Check if Linked is directly in config (SystemDefault or AllSpacesAndDisplays in Automatic mode)
+        if let linked = config["Linked"] as? [String: Any],
+           let content = linked["Content"] as? [String: Any],
+           let choices = content["Choices"] as? [[String: Any]],
+           let firstChoice = choices.first {
+
+            // Check the Provider to determine if this is Automatic mode (wallpaper as screensaver)
+            if let provider = firstChoice["Provider"] as? String {
+                // In Automatic mode, the provider is a wallpaper provider, not a screensaver
+                if provider == "com.apple.wallpaper.choice.image" ||
+                   provider == "com.apple.wallpaper.choice.dynamic" ||
+                   provider.starts(with: "com.apple.wallpaper.") {
+                    return "Automatic"
+                }
+            }
+
+            // If it's not Automatic mode, try to decode as screensaver
+            if let configurationData = firstChoice["Configuration"] as? Data {
+                // Use the new type-aware decoding method
+                if let (name, _) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                    if let screensaverName = name {
+                        return screensaverName
+                    }
+                }
+
+                // Fallback to old method for compatibility
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    return moduleName
+                }
             }
         }
 
@@ -612,7 +683,9 @@ public class ScreensaverManager: ScreensaverManaging {
 
         // Always update AllSpacesAndDisplays first (highest priority)
         // This ensures the screensaver applies everywhere regardless of other configurations
-        var allSpacesAndDisplays = modifiedPlist["AllSpacesAndDisplays"] as? [String: Any] ?? ["Type": "idle"]
+        // Create fresh AllSpacesAndDisplays to avoid preserving Automatic mode (Linked section)
+        // Setting an explicit screensaver switches from Automatic mode to explicit screensaver mode
+        var allSpacesAndDisplays: [String: Any] = ["Type": "idle"]
         allSpacesAndDisplays["Idle"] = createIdleConfiguration(with: configurationData)
         modifiedPlist["AllSpacesAndDisplays"] = allSpacesAndDisplays
 
@@ -655,7 +728,9 @@ public class ScreensaverManager: ScreensaverManaging {
         // This ensures the screensaver is applied correctly regardless of which section macOS reads
 
         // 1. Always update AllSpacesAndDisplays (highest priority in macOS)
-        var allSpacesAndDisplays = modifiedPlist["AllSpacesAndDisplays"] as? [String: Any] ?? ["Type": "idle"]
+        // Create fresh AllSpacesAndDisplays to avoid preserving Automatic mode (Linked section)
+        // Setting an explicit screensaver switches from Automatic mode to explicit screensaver mode
+        var allSpacesAndDisplays: [String: Any] = ["Type": "idle"]
         allSpacesAndDisplays["Idle"] = createIdleConfiguration(with: configurationData)
         modifiedPlist["AllSpacesAndDisplays"] = allSpacesAndDisplays
 
