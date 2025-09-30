@@ -582,6 +582,27 @@ public class ScreensaverManager: ScreensaverManaging {
             isValidDisplayKey(key)
         }
     }
+
+    /// Checks if the plist is in "All Spaces" mode (Spaces/Displays are empty)
+    private func isAllSpacesMode(_ plist: [String: Any]) -> Bool {
+        guard let spaces = plist["Spaces"] as? [String: Any] else { return true }
+        return spaces.isEmpty
+    }
+
+    /// Extracts Desktop configuration from a plist section (AllSpacesAndDisplays or SystemDefault)
+    /// Handles both Desktop (normal mode) and Linked (Automatic mode) sections
+    private func extractDesktopConfiguration(from config: [String: Any]) -> [String: Any]? {
+        // Check for existing Desktop section
+        if let desktop = config["Desktop"] as? [String: Any] {
+            return desktop
+        }
+        // Check for Linked section (Automatic mode) and use it as Desktop
+        // The structure is the same, just different key name
+        if let linked = config["Linked"] as? [String: Any] {
+            return linked
+        }
+        return nil
+    }
     
     private func setLegacyScreensaver(module: String) throws {
         let moduleDict: [String: Any] = [
@@ -689,15 +710,34 @@ public class ScreensaverManager: ScreensaverManaging {
     ) throws -> [String: Any] {
         var modifiedPlist = plist
 
-        // Always update AllSpacesAndDisplays first (highest priority)
-        // This ensures the screensaver applies everywhere regardless of other configurations
-        // Create fresh AllSpacesAndDisplays to avoid preserving Automatic mode (Linked section)
-        // Setting an explicit screensaver switches from Automatic mode to explicit screensaver mode
+        // Check if we're in "All Spaces" mode (Spaces/Displays are empty)
+        if isAllSpacesMode(plist) {
+            // All Spaces mode: preserve wallpaper, add screensaver, keep configuration simple
+            var allSpacesConfig: [String: Any] = ["Type": "individual"]
+
+            // Preserve existing Desktop/wallpaper configuration
+            if let existingConfig = plist["AllSpacesAndDisplays"] as? [String: Any],
+               let desktop = extractDesktopConfiguration(from: existingConfig) {
+                allSpacesConfig["Desktop"] = desktop
+            }
+
+            // Add screensaver configuration
+            allSpacesConfig["Idle"] = createIdleConfiguration(with: configurationData)
+
+            // Apply to both AllSpacesAndDisplays and SystemDefault for consistency
+            modifiedPlist["AllSpacesAndDisplays"] = allSpacesConfig
+            modifiedPlist["SystemDefault"] = allSpacesConfig
+
+            // Return early - don't populate Spaces/Displays dictionaries
+            return modifiedPlist
+        }
+
+        // Multi-space mode: update AllSpacesAndDisplays with just screensaver
         var allSpacesAndDisplays: [String: Any] = ["Type": "idle"]
         allSpacesAndDisplays["Idle"] = createIdleConfiguration(with: configurationData)
         modifiedPlist["AllSpacesAndDisplays"] = allSpacesAndDisplays
 
-        // Check if we're in a single screen/space configuration
+        // Process all displays in multi-space configuration
         if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
             // Multi-space configuration - set on all displays
             let spaceTree = getNativeSpaceTree()
@@ -732,18 +772,35 @@ public class ScreensaverManager: ScreensaverManaging {
     ) throws -> [String: Any] {
         var modifiedPlist = plist
 
-        // Update ALL relevant sections for consistency with macOS precedence
-        // This ensures the screensaver is applied correctly regardless of which section macOS reads
+        // Check if we're in "All Spaces" mode (Spaces/Displays are empty)
+        if isAllSpacesMode(plist) {
+            // All Spaces mode: preserve wallpaper, add screensaver, keep configuration simple
+            var allSpacesConfig: [String: Any] = ["Type": "individual"]
 
-        // 1. Always update AllSpacesAndDisplays (highest priority in macOS)
-        // Create fresh AllSpacesAndDisplays to avoid preserving Automatic mode (Linked section)
-        // Setting an explicit screensaver switches from Automatic mode to explicit screensaver mode
+            // Preserve existing Desktop/wallpaper configuration
+            if let existingConfig = plist["AllSpacesAndDisplays"] as? [String: Any],
+               let desktop = extractDesktopConfiguration(from: existingConfig) {
+                allSpacesConfig["Desktop"] = desktop
+            }
+
+            // Add screensaver configuration
+            allSpacesConfig["Idle"] = createIdleConfiguration(with: configurationData)
+
+            // Apply to both AllSpacesAndDisplays and SystemDefault for consistency
+            modifiedPlist["AllSpacesAndDisplays"] = allSpacesConfig
+            modifiedPlist["SystemDefault"] = allSpacesConfig
+
+            // Return early - don't populate Spaces dictionary
+            return modifiedPlist
+        }
+
+        // Multi-space mode: create fresh AllSpacesAndDisplays for backward compatibility
         var allSpacesAndDisplays: [String: Any] = ["Type": "idle"]
         allSpacesAndDisplays["Idle"] = createIdleConfiguration(with: configurationData)
         modifiedPlist["AllSpacesAndDisplays"] = allSpacesAndDisplays
 
-        // 2. Update Spaces[""] if Spaces exists (medium priority)
-        if let spaces = plist["Spaces"] as? [String: Any] {
+        // Update Spaces[""] if Spaces exists (only in multi-space mode)
+        if let spaces = plist["Spaces"] as? [String: Any], !spaces.isEmpty {
             var spacesDict = spaces
             var spaceConfig = spacesDict[""] as? [String: Any] ?? [:]
 
