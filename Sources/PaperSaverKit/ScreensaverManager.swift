@@ -814,11 +814,10 @@ public class ScreensaverManager: ScreensaverManaging {
             // Filter out invalid display keys (like "Main") before adding new entries
             spaceDisplays = filterValidDisplayKeys(spaceDisplays)
             for screen in NSScreen.screens {
-                if let screenID = ScreenIdentifier(from: screen) {
-                    let displayKey = screenID.displayID.description
+                if let displayUUID = getDisplayUUID(for: screen) {
                     var displayConfig: [String: Any] = ["Type": "individual"]
                     displayConfig["Idle"] = createIdleConfiguration(with: configurationData)
-                    spaceDisplays[displayKey] = displayConfig
+                    spaceDisplays[displayUUID] = displayConfig
                 }
             }
             spaceConfig["Displays"] = spaceDisplays
@@ -934,11 +933,10 @@ public class ScreensaverManager: ScreensaverManaging {
             if spaceDisplays.isEmpty {
                 // If this space has no display configurations yet, add only currently connected displays
                 for screen in NSScreen.screens {
-                    if let screenID = ScreenIdentifier(from: screen) {
-                        let displayKey = screenID.displayID.description
+                    if let displayUUID = getDisplayUUID(for: screen) {
                         var displayConfig: [String: Any] = ["Type": "individual"]
                         displayConfig["Idle"] = createIdleConfiguration(with: configurationData)
-                        spaceDisplays[displayKey] = displayConfig
+                        spaceDisplays[displayUUID] = displayConfig
                     }
                 }
             } else {
@@ -1571,18 +1569,29 @@ extension ScreensaverManager: SpaceManaging {
                   let currentSpace = currentSpaceDict["id64"] as? NSNumber else {
                 continue
             }
-            
-            let monitorName = getDisplayName(for: displayID)
-            
+
+            // Resolve "Main" display identifier to actual UUID
+            // When "Displays have separate spaces" is disabled, Core Graphics returns "Main"
+            // instead of the actual display UUID. We need to resolve it to the real hardware UUID.
+            var resolvedDisplayID = displayID
+            if displayID == "Main" {
+                if let mainScreen = NSScreen.main,
+                   let mainScreenUUID = getDisplayUUID(for: mainScreen) {
+                    resolvedDisplayID = mainScreenUUID
+                }
+            }
+
+            let monitorName = getDisplayName(for: resolvedDisplayID)
+
             // Get the display ID from UUID for arrangement
             var displayIDNum: CGDirectDisplayID = 0
-            if let cfUuid = CFUUIDCreateFromString(nil, displayID as CFString) {
+            if let cfUuid = CFUUIDCreateFromString(nil, resolvedDisplayID as CFString) {
                 displayIDNum = CGDisplayGetDisplayIDFromUUID(cfUuid)
             }
-            
+
             var monitorInfo: [String: Any] = [:]
             monitorInfo["name"] = monitorName
-            monitorInfo["uuid"] = displayID
+            monitorInfo["uuid"] = resolvedDisplayID
             monitorInfo["display_number"] = getDisplayArrangement(for: displayIDNum) + 1
             
             var spacesArray: [[String: Any]] = []
