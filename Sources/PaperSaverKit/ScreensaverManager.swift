@@ -574,6 +574,14 @@ public class ScreensaverManager: ScreensaverManaging {
         let range = NSRange(location: 0, length: key.count)
         return regex?.firstMatch(in: key, options: [], range: range) != nil
     }
+
+    /// Filters a Displays dictionary to keep only valid UUID-format display keys
+    /// Removes invalid keys like "Main", numeric strings, or other non-UUID formats
+    private func filterValidDisplayKeys(_ displays: [String: Any]) -> [String: Any] {
+        return displays.filter { key, _ in
+            isValidDisplayKey(key)
+        }
+    }
     
     private func setLegacyScreensaver(module: String) throws {
         let moduleDict: [String: Any] = [
@@ -746,6 +754,8 @@ public class ScreensaverManager: ScreensaverManaging {
 
             // Also write to Displays section for backward compatibility
             var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
+            // Filter out invalid display keys (like "Main") before adding new entries
+            spaceDisplays = filterValidDisplayKeys(spaceDisplays)
             for screen in NSScreen.screens {
                 if let screenID = ScreenIdentifier(from: screen) {
                     let displayKey = screenID.displayID.description
@@ -853,6 +863,8 @@ public class ScreensaverManager: ScreensaverManaging {
 
         // Get or create Displays section for this space (for backward compatibility)
         var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
+        // Filter out invalid display keys (like "Main") to prevent plist corruption
+        spaceDisplays = filterValidDisplayKeys(spaceDisplays)
 
         if let displayUUID = displayUUID {
             // Set screensaver for specific display

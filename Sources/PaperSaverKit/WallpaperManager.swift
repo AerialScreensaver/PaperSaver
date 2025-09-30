@@ -230,6 +230,8 @@ public class WallpaperManager: WallpaperManaging {
            let screenID = ScreenIdentifier(from: screen) {
             let displayKey = screenID.displayID.description
             var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
+            // Filter out invalid display keys (like "Main") to prevent plist corruption
+            spaceDisplays = filterValidDisplayKeys(spaceDisplays)
             var displayConfig = spaceDisplays[displayKey] as? [String: Any] ?? ["Type": "individual"]
             displayConfig["Desktop"] = createDesktopConfiguration(with: configurationData, options: optionsData)
             spaceDisplays[displayKey] = displayConfig
@@ -328,6 +330,8 @@ public class WallpaperManager: WallpaperManaging {
 
                     // Also write to Displays section for backward compatibility
                     var spaceDisplays = spaceConfig["Displays"] as? [String: Any] ?? [:]
+                    // Filter out invalid display keys (like "Main") to prevent plist corruption
+                    spaceDisplays = filterValidDisplayKeys(spaceDisplays)
                     var spaceDisplayConfig = spaceDisplays[displayUUID] as? [String: Any] ?? ["Type": "individual"]
                     spaceDisplayConfig["Desktop"] = createDesktopConfiguration(with: configurationData, options: optionsData)
                     spaceDisplays[displayUUID] = spaceDisplayConfig
@@ -409,5 +413,22 @@ public class WallpaperManager: WallpaperManaging {
         task.launchPath = "/usr/bin/killall"
         task.arguments = ["WallpaperAgent"]
         task.launch()
+    }
+
+    private func isValidDisplayKey(_ key: String) -> Bool {
+        // Valid display keys are UUIDs in format XXXXXXXX-XXXX-XXXX-XXXX-XXXXXXXXXXXX
+        // Invalid keys include "Main", numeric strings, or other non-UUID formats
+        let uuidPattern = "^[0-9A-F]{8}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{4}-[0-9A-F]{12}$"
+        let regex = try? NSRegularExpression(pattern: uuidPattern, options: [.caseInsensitive])
+        let range = NSRange(location: 0, length: key.count)
+        return regex?.firstMatch(in: key, options: [], range: range) != nil
+    }
+
+    /// Filters a Displays dictionary to keep only valid UUID-format display keys
+    /// Removes invalid keys like "Main", numeric strings, or other non-UUID formats
+    private func filterValidDisplayKeys(_ displays: [String: Any]) -> [String: Any] {
+        return displays.filter { key, _ in
+            isValidDisplayKey(key)
+        }
     }
 }
