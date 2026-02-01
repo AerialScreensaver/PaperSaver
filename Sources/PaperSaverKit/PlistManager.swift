@@ -142,7 +142,7 @@ public final class PlistManager: @unchecked Sendable {
         case .traditional:
             return try createTraditionalScreensaverConfiguration(moduleURL: moduleURL)
         case .appExtension:
-            return try createNeptuneExtensionConfiguration()
+            return try createAppExtensionConfiguration(moduleURL: moduleURL)
         case .sequoiaVideo:
             return try createSequoiaVideoConfiguration()
         case .builtInMac:
@@ -168,6 +168,21 @@ public final class PlistManager: @unchecked Sendable {
         return try createBinaryPlist(from: config)
     }
     
+    private func createAppExtensionConfiguration(moduleURL: URL) throws -> Data {
+        // App extensions (.appex) use the same module structure as traditional screensavers
+        // This allows the system to locate and load the extension correctly
+        let urlString = moduleURL.absoluteString
+        let cleanURLString = urlString.hasSuffix("/") ? String(urlString.dropLast()) : urlString
+
+        let config: [String: Any] = [
+            "module": [
+                "relative": cleanURLString
+            ]
+        ]
+
+        return try createBinaryPlist(from: config)
+    }
+
     private func createNeptuneExtensionConfiguration() throws -> Data {
         // Neptune extensions use different configuration structure
         // Based on analysis, we'll create a placeholder structure
@@ -181,7 +196,7 @@ public final class PlistManager: @unchecked Sendable {
                 "id": 0
             ]
         ]
-        
+
         return try createBinaryPlist(from: config)
     }
     

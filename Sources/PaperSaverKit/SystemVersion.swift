@@ -27,6 +27,7 @@ public struct SystemPaths {
     }
     
     public static func screensaverModuleURL(for moduleName: String) -> URL? {
+        // First try hardcoded directories (fast path for common cases)
         for directory in screensaverModulesDirectories() {
             let saverURL = directory.appendingPathComponent("\(moduleName).saver")
             let appexURL = directory.appendingPathComponent("\(moduleName).appex")
@@ -38,6 +39,12 @@ public struct SystemPaths {
                 return appexURL
             }
         }
+
+        // Fallback to pluginkit for third-party appex in non-standard locations
+        if let ext = try? PluginkitManager.shared.findExtension(byName: moduleName) {
+            return ext.path
+        }
+
         return nil
     }
 }
