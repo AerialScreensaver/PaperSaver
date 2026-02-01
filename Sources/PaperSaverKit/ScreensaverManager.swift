@@ -490,59 +490,76 @@ public class ScreensaverManager: ScreensaverManaging {
     
     public func listAvailableScreensavers() -> [ScreensaverModule] {
         var modules: [ScreensaverModule] = []
-        
+
+        // 1. Get appex screensavers from pluginkit (authoritative source)
+        modules.append(contentsOf: getAppexScreensaversFromPluginkit())
+
+        // 2. Scan directories for traditional .saver files
+        modules.append(contentsOf: getTraditionalScreensavers())
+
+        return modules
+    }
+
+    /// Gets appex screensavers by querying pluginkit for all registered screensaver extensions
+    private func getAppexScreensaversFromPluginkit() -> [ScreensaverModule] {
+        guard let extensions = try? PluginkitManager.shared.discoverScreensaverExtensions() else {
+            return []
+        }
+
+        return extensions.compactMap { ext -> ScreensaverModule? in
+            // Skip legacy screensaver wrappers (they're not real screensavers)
+            guard !ext.bundleIdentifier.contains("legacyScreenSaver") else {
+                return nil
+            }
+
+            return ScreensaverModule(
+                name: ext.displayName,
+                identifier: ext.path.lastPathComponent,
+                path: ext.path,
+                type: .appExtension,
+                isSystem: ext.isSystem
+            )
+        }
+    }
+
+    /// Scans directories for traditional .saver screensaver files
+    private func getTraditionalScreensavers() -> [ScreensaverModule] {
+        var modules: [ScreensaverModule] = []
+
         for directory in SystemPaths.screensaverModulesDirectories() {
             if let enumerator = FileManager.default.enumerator(
                 at: directory,
                 includingPropertiesForKeys: [.isDirectoryKey],
-                options: [.skipsHiddenFiles, .skipsPackageDescendants] // Don't enumerate inside bundles
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]
             ) {
                 for case let fileURL as URL in enumerator {
                     // Skip Default Collections and its contents
                     if fileURL.path.contains("Default Collections") {
                         continue
                     }
-                    
-                    let `extension` = fileURL.pathExtension.lowercased()
-                    
-                    if let screensaverType = ScreensaverType.allCases.first(where: { $0.fileExtension == `extension` }) {
-                        let name = fileURL.deletingPathExtension().lastPathComponent
-                        let identifier = fileURL.lastPathComponent
-                        let isSystem = fileURL.path.hasPrefix("/System/")
-                        
-                        // For .appex files in ExtensionKit, filter to known screensavers
-                        if `extension` == "appex" && fileURL.path.contains("/ExtensionKit/Extensions/") {
-                            // Static list of known screensaver extensions (updated via Scripts/update-screensaver-list.swift)
-                            let knownScreensavers = [
-                                "Album Artwork",
-                                "Arabesque", 
-                                "Computer Name",
-                                "Drift",
-                                "Flurry",
-                                "Hello",
-                                "iLifeSlideshows",
-                                "Monterey",
-                                "Shell",
-                                "Ventura",
-                                "Word of the Day"
-                            ]
-                            guard knownScreensavers.contains(name) else {
-                                continue
-                            }
-                        }
-                        
-                        modules.append(ScreensaverModule(
-                            name: name,
-                            identifier: identifier,
-                            path: fileURL,
-                            type: screensaverType,
-                            isSystem: isSystem
-                        ))
+
+                    let pathExtension = fileURL.pathExtension.lowercased()
+
+                    // Only process .saver files (traditional screensavers)
+                    guard pathExtension == "saver" else {
+                        continue
                     }
+
+                    let name = fileURL.deletingPathExtension().lastPathComponent
+                    let identifier = fileURL.lastPathComponent
+                    let isSystem = fileURL.path.hasPrefix("/System/")
+
+                    modules.append(ScreensaverModule(
+                        name: name,
+                        identifier: identifier,
+                        path: fileURL,
+                        type: .traditional,
+                        isSystem: isSystem
+                    ))
                 }
             }
         }
-        
+
         return modules
     }
     
