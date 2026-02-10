@@ -99,7 +99,7 @@ public final class PluginkitManager: @unchecked Sendable {
     }
 
     /// Parse pluginkit -m -v -p com.apple.screensaver output
-    /// Format: "    com.apple.screensaver.flurry(1.0)  UUID  2024-01-01 12:00:00 +0000  /System/Library/..."
+    /// Fields are tab-separated: "bundleID(version)\tUUID\ttimestamp\tpath"
     private func parsePluginkitOutput(_ output: String) -> [PluginkitExtension] {
         var extensions: [PluginkitExtension] = []
 
@@ -118,27 +118,21 @@ public final class PluginkitManager: @unchecked Sendable {
             let bundleIdentifier = String(trimmed[..<parenOpen])
             let version = String(trimmed[trimmed.index(after: parenOpen)..<parenClose])
 
-            // After the closing paren, we have: UUID, timestamp, path
+            // After the closing paren, fields are tab-separated: UUID, timestamp, path
+            // Paths may contain spaces (e.g. "Aerial Companion.app"), so we must
+            // split by tab only — not by whitespace.
             let remainder = String(trimmed[trimmed.index(after: parenClose)...])
-                .trimmingCharacters(in: .whitespaces)
-
-            // Split by whitespace to get components
-            let components = remainder.components(separatedBy: .whitespaces)
+            let tabComponents = remainder.components(separatedBy: "\t")
+                .map { $0.trimmingCharacters(in: .whitespaces) }
                 .filter { !$0.isEmpty }
 
-            // First component is UUID
-            let uuid = components.first ?? ""
+            // Expect at least 3 fields: UUID, timestamp, path
+            guard tabComponents.count >= 3 else { continue }
 
-            // Path starts with "/" and is the last component that starts with /
-            var pathString: String?
-            for component in components.reversed() {
-                if component.hasPrefix("/") {
-                    pathString = component
-                    break
-                }
-            }
+            let uuid = tabComponents[0]
+            let path = tabComponents.last!
 
-            guard let path = pathString else { continue }
+            guard path.hasPrefix("/") else { continue }
 
             let ext = PluginkitExtension(
                 bundleIdentifier: bundleIdentifier,
