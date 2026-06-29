@@ -97,6 +97,50 @@ final class WallpaperExtensionTests: XCTestCase {
         XCTAssertEqual(providerOfSlot(s["Idle"]), "com.existing.saver", "existing idle must be preserved")
     }
 
+    /// Setting only the screensaver preserves an existing desktop wallpaper (the common
+    /// "screensaver only" case — must NOT wipe the user's wallpaper).
+    func testScreensaverOnlyPreservesExistingDesktop() throws {
+        let existingDesktop: [String: Any] = ["Content": ["Choices": [["Provider": "com.apple.wallpaper.choice.image", "Files": [], "Configuration": Data()]]]]
+        let plist: [String: Any] = ["AllSpacesAndDisplays": ["Type": "individual", "Desktop": existingDesktop]]
+        let idle = try manager.makeExtensionSlotConfiguration(provider: bundleID, configuration: token, optionValues: [:])
+
+        let out = manager.applyExtensionSlots(to: plist, desktop: nil, idle: idle)
+
+        let s = try XCTUnwrap(out["AllSpacesAndDisplays"] as? [String: Any])
+        XCTAssertEqual(providerOfSlot(s["Idle"]), bundleID, "screensaver set to our extension")
+        XCTAssertEqual(providerOfSlot(s["Desktop"]), "com.apple.wallpaper.choice.image", "existing desktop wallpaper must be preserved")
+    }
+
+    /// Single-slot from automatic/"linked" mode materializes the user's real linked wallpaper
+    /// into the missing slot rather than wiping it.
+    func testScreensaverOnlyFromAutomaticModeMaterializesLinkedWallpaper() throws {
+        let linked: [String: Any] = ["Content": ["Choices": [["Provider": "com.apple.wallpaper.choice.dynamic", "Files": [], "Configuration": Data()]]]]
+        let plist: [String: Any] = ["AllSpacesAndDisplays": ["Type": "linked", "Linked": linked]]
+        let idle = try manager.makeExtensionSlotConfiguration(provider: bundleID, configuration: token, optionValues: [:])
+
+        let out = manager.applyExtensionSlots(to: plist, desktop: nil, idle: idle)
+
+        let s = try XCTUnwrap(out["AllSpacesAndDisplays"] as? [String: Any])
+        XCTAssertNil(s["Linked"])
+        XCTAssertEqual(s["Type"] as? String, "individual")
+        XCTAssertEqual(providerOfSlot(s["Idle"]), bundleID)
+        XCTAssertEqual(providerOfSlot(s["Desktop"]), "com.apple.wallpaper.choice.dynamic", "linked wallpaper must be materialized into Desktop, not wiped")
+    }
+
+    /// With no real wallpaper to preserve (the "default"/none placeholder), single-slot
+    /// mirrors the slot we set into the other slot — never leaves a slot missing.
+    func testSingleSlotFromDefaultMirrors() throws {
+        let linkedDefault: [String: Any] = ["Content": ["Choices": [["Provider": "default", "Files": [], "Configuration": Data()]]]]
+        let plist: [String: Any] = ["AllSpacesAndDisplays": ["Type": "linked", "Linked": linkedDefault]]
+        let idle = try manager.makeExtensionSlotConfiguration(provider: bundleID, configuration: token, optionValues: [:])
+
+        let out = manager.applyExtensionSlots(to: plist, desktop: nil, idle: idle)
+
+        let s = try XCTUnwrap(out["AllSpacesAndDisplays"] as? [String: Any])
+        XCTAssertEqual(providerOfSlot(s["Idle"]), bundleID)
+        XCTAssertEqual(providerOfSlot(s["Desktop"]), bundleID, "no real wallpaper to preserve → mirror the set slot")
+    }
+
     // MARK: Helpers
 
     private func decodeValues(_ content: [String: Any]) throws -> [String: Any] {

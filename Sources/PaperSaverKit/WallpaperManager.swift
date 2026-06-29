@@ -545,14 +545,27 @@ public class WallpaperManager: WallpaperManaging {
 
         func apply(into config: [String: Any]?) -> [String: Any] {
             var c = config ?? [:]
+            // Capture the user's current automatic-mode ("Linked") choice before switching
+            // the section to individual mode, so writing only ONE slot doesn't wipe the
+            // other. The agent's "no wallpaper" placeholder uses Provider "default" — that's
+            // not a real choice worth preserving.
+            let linked = c["Linked"] as? [String: Any]
+            let preservableLinked = (providerOfSlot(linked).map { $0 != "default" } ?? false) ? linked : nil
+            c.removeValue(forKey: "Linked")
+            // Force "individual" mode — leaving Type=linked makes the agent ignore the
+            // Desktop/Idle choices we write and stay in automatic mode.
+            c["Type"] = "individual"
+
             if let desktop { c["Desktop"] = desktop }
             if let idle { c["Idle"] = idle }
-            // Force "individual" mode and drop any "Linked" (automatic-mode) block. When no
-            // wallpaper is set the agent puts the section in linked/automatic mode
-            // (Type=linked + a Linked block with Provider "default"); leaving that in place
-            // makes the agent ignore the Desktop/Idle choices we just wrote.
-            c["Type"] = "individual"
-            c.removeValue(forKey: "Linked")
+
+            // Individual mode requires BOTH Desktop and Idle present or the agent rejects the
+            // whole section (resetting it to none — which would wipe an existing wallpaper or
+            // screensaver). Backfill any slot the caller didn't set and that doesn't already
+            // exist: prefer the user's former automatic wallpaper, else mirror the slot we
+            // did set. Never leave a slot missing.
+            if c["Desktop"] == nil { c["Desktop"] = preservableLinked ?? c["Idle"] }
+            if c["Idle"] == nil { c["Idle"] = preservableLinked ?? c["Desktop"] }
             return c
         }
 
@@ -597,13 +610,17 @@ public class WallpaperManager: WallpaperManaging {
     }
 
     private func providerInSection(_ section: [String: Any]?, slotKey: String) -> String? {
-        guard let slot = section?[slotKey] as? [String: Any],
-              let content = slot["Content"] as? [String: Any],
-              let choices = content["Choices"] as? [[String: Any]],
-              let provider = choices.first?["Provider"] as? String else {
+        return providerOfSlot(section?[slotKey] as? [String: Any])
+    }
+
+    /// The provider (extension bundle id / choice provider) of a single slot dict
+    /// (`{ Content: { Choices: [{ Provider, … }] } }`), or nil.
+    private func providerOfSlot(_ slot: [String: Any]?) -> String? {
+        guard let content = slot?["Content"] as? [String: Any],
+              let choices = content["Choices"] as? [[String: Any]] else {
             return nil
         }
-        return provider
+        return choices.first?["Provider"] as? String
     }
 
     /// Writes the plist, restarts WallpaperAgent, and verifies the extension took effect.
