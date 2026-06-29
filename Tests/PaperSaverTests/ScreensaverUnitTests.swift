@@ -1,5 +1,5 @@
 import XCTest
-@testable import PaperSaver
+@testable import PaperSaverKit
 
 /// Pure unit tests that don't interact with system state
 final class ScreensaverUnitTests: XCTestCase {
@@ -20,7 +20,7 @@ final class ScreensaverUnitTests: XCTestCase {
         XCTAssertEqual(ScreensaverType.appExtension.providerIdentifier,
                       "com.apple.NeptuneOneExtension")
         XCTAssertEqual(ScreensaverType.sequoiaVideo.providerIdentifier,
-                      "com.apple.wallpaper.choice.sequoia")
+                      "com.apple.wallpaper.choice.aerials")
         XCTAssertEqual(ScreensaverType.builtInMac.providerIdentifier,
                       "com.apple.wallpaper.choice.macintosh")
         XCTAssertEqual(ScreensaverType.defaultScreen.providerIdentifier,

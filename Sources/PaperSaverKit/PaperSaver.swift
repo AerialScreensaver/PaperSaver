@@ -400,6 +400,61 @@ public class PaperSaver {
         try await wallpaperManager.setWallpaperForDisplaySpace(imageURL: imageURL, displayNumber: displayNumber, spaceNumber: spaceNumber, options: options)
     }
 
+    // MARK: Wallpaper & Screensaver Extensions (macOS 14.0+)
+
+    /// Activates a wallpaper/screensaver extension by its bundle identifier.
+    ///
+    /// On macOS Sonoma+ a third-party extension (an `.appex` declaring
+    /// `EXExtensionPointIdentifier com.apple.wallpaper`) can be set as the desktop
+    /// wallpaper, the screensaver (the "idle" wallpaper), or both. This writes the
+    /// extension choice directly into the wallpaper store and restarts WallpaperAgent,
+    /// the same mechanism used to set screensavers.
+    ///
+    /// - Parameters:
+    ///   - bundleID: The extension's bundle identifier, stored as the choice provider
+    ///     (e.g. `"com.example.App.MyWallpaperExtension"`).
+    ///   - configuration: Opaque, extension-defined configuration bytes stored with the
+    ///     choice. Pass whatever the extension expects (often a small token); may be empty.
+    ///   - slot: Which slot(s) to occupy — `.desktop`, `.screensaver`, or `.both`.
+    ///   - optionValues: Optional option-values dictionary applied to the desktop slot
+    ///     (e.g. `["placement": ["picker": ["_0": ["id": "Crop"]]]]`). The screensaver slot
+    ///     is always written with empty option values. Pass `nil` for defaults.
+    ///   - skipRestart: If `true`, skips restarting WallpaperAgent and the post-write
+    ///     verification. Useful for batching multiple changes.
+    /// - Throws: `PaperSaverError.plistReadError` if the wallpaper store can't be read, or
+    ///   `PaperSaverError.invalidConfiguration` if the bundle ID is empty or the change
+    ///   could not be verified after restart.
+    @available(macOS 14.0, *)
+    public func setWallpaperExtension(
+        bundleID: String,
+        configuration: Data,
+        slot: WallpaperExtensionSlot = .both,
+        optionValues: [String: Any]? = nil,
+        skipRestart: Bool = false
+    ) async throws {
+        try await wallpaperManager.setWallpaperExtension(
+            bundleID: bundleID,
+            configuration: configuration,
+            slot: slot,
+            optionValues: optionValues,
+            skipRestart: skipRestart
+        )
+    }
+
+    /// The bundle identifier of the extension currently set as the desktop wallpaper,
+    /// or `nil` if the desktop wallpaper is not an extension (e.g. a plain image).
+    @available(macOS 14.0, *)
+    public func getCurrentWallpaperExtension(for screen: NSScreen? = nil) -> String? {
+        return wallpaperManager.getCurrentWallpaperExtension(for: screen)
+    }
+
+    /// The bundle identifier of the extension currently set as the screensaver,
+    /// or `nil` if the screensaver is not a wallpaper-style extension.
+    @available(macOS 14.0, *)
+    public func getCurrentScreensaverExtension(for screen: NSScreen? = nil) -> String? {
+        return wallpaperManager.getCurrentScreensaverExtension(for: screen)
+    }
+
     // MARK: - Space & Display Management (macOS 14.0+)
 
     /// Gets information about the currently active space.

@@ -1,5 +1,5 @@
 import XCTest
-@testable import PaperSaver
+@testable import PaperSaverKit
 
 /// Tests that only read system state without modifying it
 /// These tests don't require backup/restore

@@ -1,5 +1,5 @@
 import XCTest
-@testable import PaperSaver
+@testable import PaperSaverKit
 
 /// Tests that modify system state and require backup/restore
 final class ScreensaverManagerMutationTests: XCTestCase {

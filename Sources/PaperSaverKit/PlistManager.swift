@@ -237,7 +237,13 @@ public final class PlistManager: @unchecked Sendable {
             // For Sequoia video screensavers, we might extract name differently
             return "Sequoia Video (\(appearance))"
         }
-        
+
+        // Try aerial video format (assetID-based config)
+        if let values = plist["values"] as? [String: Any],
+           values["assetID"] != nil {
+            return "Aerials (Apple)"
+        }
+
         return nil
     }
     
@@ -265,7 +271,13 @@ public final class PlistManager: @unchecked Sendable {
            let appearance = values["appearance"] as? String {
             return ("Sequoia Video (\(appearance))", .sequoiaVideo)
         }
-        
+
+        // Try aerial video format (assetID-based config)
+        if let values = plist["values"] as? [String: Any],
+           values["assetID"] != nil {
+            return ("Aerials (Apple)", .sequoiaVideo)
+        }
+
         return (nil, .traditional)
     }
     

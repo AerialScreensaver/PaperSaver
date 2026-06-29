@@ -1,23 +1,63 @@
 import Foundation
 import AppKit
 
+/// Identifies which wallpaper "slot" an extension should occupy.
+///
+/// macOS Sonoma+ stores the desktop wallpaper and the screensaver ("idle"
+/// wallpaper) as two independent slots in the same wallpaper store. A single
+/// extension (an `.appex` declaring `EXExtensionPointIdentifier com.apple.wallpaper`)
+/// can occupy either or both.
+public enum WallpaperExtensionSlot: Sendable {
+    /// The desktop wallpaper slot only.
+    case desktop
+    /// The screensaver (idle) slot only.
+    case screensaver
+    /// Both the desktop and screensaver slots.
+    case both
+
+    var includesDesktop: Bool {
+        switch self {
+        case .desktop, .both: return true
+        case .screensaver: return false
+        }
+    }
+
+    var includesScreensaver: Bool {
+        switch self {
+        case .screensaver, .both: return true
+        case .desktop: return false
+        }
+    }
+}
+
 public protocol WallpaperManaging {
     func setWallpaper(imageURL: URL, screen: NSScreen?, options: WallpaperOptions) async throws
     func getCurrentWallpaper(for screen: NSScreen?) -> WallpaperInfo?
-    
+
     @available(macOS 14.0, *)
     func setWallpaperForSpace(imageURL: URL, spaceUUID: String, screen: NSScreen?, options: WallpaperOptions) async throws
-    
+
     @available(macOS 14.0, *)
     func setWallpaperForSpaceID(imageURL: URL, spaceID: Int, screen: NSScreen?, options: WallpaperOptions) async throws
-    
+
     func setWallpaperEverywhere(imageURL: URL, options: WallpaperOptions) async throws
-    
+
     @available(macOS 14.0, *)
     func setWallpaperForDisplay(imageURL: URL, displayNumber: Int, options: WallpaperOptions) async throws
-    
+
     @available(macOS 14.0, *)
     func setWallpaperForDisplaySpace(imageURL: URL, displayNumber: Int, spaceNumber: Int, options: WallpaperOptions) async throws
+
+    // MARK: Wallpaper / Screensaver Extensions (macOS 14.0+)
+
+    @available(macOS 14.0, *)
+    func setWallpaperExtension(bundleID: String, configuration: Data, slot: WallpaperExtensionSlot, optionValues: [String: Any]?, skipRestart: Bool) async throws
+
+    @available(macOS 14.0, *)
+    func getCurrentWallpaperExtension(for screen: NSScreen?) -> String?
+
+    @available(macOS 14.0, *)
+    func getCurrentScreensaverExtension(for screen: NSScreen?) -> String?
 }
 
 public class WallpaperManager: WallpaperManaging {
@@ -363,6 +403,242 @@ public class WallpaperManager: WallpaperManaging {
         try await setWallpaperForSpace(imageURL: imageURL, spaceUUID: spaceUUID, screen: nil, options: options)
     }
     
+    // MARK: - Wallpaper / Screensaver Extensions (macOS 14.0+)
+
+    /// Activates a wallpaper/screensaver extension by its bundle identifier.
+    ///
+    /// Writes the extension choice into the wallpaper store's Desktop slot (wallpaper)
+    /// and/or Idle slot (screensaver) across `AllSpacesAndDisplays`, `SystemDefault`, and
+    /// any per-space entries, then restarts WallpaperAgent. Mirrors the screensaver path
+    /// (`ScreensaverManager`), which uses the same plist mechanism.
+    @available(macOS 14.0, *)
+    public func setWallpaperExtension(
+        bundleID: String,
+        configuration: Data,
+        slot: WallpaperExtensionSlot = .both,
+        optionValues: [String: Any]? = nil,
+        skipRestart: Bool = false
+    ) async throws {
+        guard !bundleID.isEmpty else {
+            throw PaperSaverError.invalidConfiguration("Extension bundle identifier cannot be empty")
+        }
+
+        let indexPath = SystemPaths.wallpaperIndexPath
+        guard var plist = try? plistManager.read(at: indexPath) else {
+            throw PaperSaverError.plistReadError(indexPath)
+        }
+
+        // WallpaperAgent rejects under-specified desktop choices (it resets to "no
+        // wallpaper" on restart), so the desktop slot must carry COMPLETE option values
+        // matching what System Settings records: both a "placement" AND a background
+        // "color". Omitting "color" is enough to make the agent reject the whole choice.
+        // The idle (screensaver) slot, by contrast, uses empty option values as the system does.
+        let desktopOptions = optionValues ?? defaultDesktopOptionValues()
+        let desktopSlot = slot.includesDesktop
+            ? try makeExtensionSlotConfiguration(provider: bundleID, configuration: configuration, optionValues: desktopOptions)
+            : nil
+        let idleSlot = slot.includesScreensaver
+            ? try makeExtensionSlotConfiguration(provider: bundleID, configuration: configuration, optionValues: [:])
+            : nil
+
+        plist = applyExtensionSlots(to: plist, desktop: desktopSlot, idle: idleSlot)
+
+        try await writeExtensionWithRollback(
+            plist,
+            to: indexPath,
+            restartAgent: !skipRestart,
+            slot: slot,
+            expectedProvider: bundleID
+        )
+    }
+
+    /// The bundle identifier of the extension currently set as the desktop wallpaper,
+    /// or `nil` if the desktop wallpaper is not an extension (e.g. a plain image).
+    @available(macOS 14.0, *)
+    public func getCurrentWallpaperExtension(for screen: NSScreen? = nil) -> String? {
+        return currentExtensionProvider(slotKey: "Desktop")
+    }
+
+    /// The bundle identifier of the extension currently set as the screensaver,
+    /// or `nil` if the screensaver is not a wallpaper-style extension.
+    @available(macOS 14.0, *)
+    public func getCurrentScreensaverExtension(for screen: NSScreen? = nil) -> String? {
+        return currentExtensionProvider(slotKey: "Idle")
+    }
+
+    // MARK: Extension helpers
+
+    /// Complete default option values for a desktop wallpaper-extension choice: a "Crop"
+    /// placement plus an opaque-black background color. WallpaperAgent requires the desktop
+    /// slot to carry a background color or it rejects the choice; the value is otherwise
+    /// cosmetic (only visible behind a non-filling wallpaper). Callers may override via
+    /// `setWallpaperExtension(optionValues:)`.
+    func defaultDesktopOptionValues() -> [String: Any] {
+        return [
+            "placement": ["picker": ["_0": ["id": "Crop"]]],
+            "color": defaultBackgroundColor()
+        ]
+    }
+
+    /// The background-color structure WallpaperAgent records for a desktop choice
+    /// (opaque black in the generic RGB color space).
+    private func defaultBackgroundColor() -> [String: Any] {
+        // `colorSpace` is an archived plist of the color-space name string, exactly as the
+        // system stores it (`bplist00` + "kCGColorSpaceGenericRGB").
+        let colorSpaceData = (try? PropertyListSerialization.data(
+            fromPropertyList: "kCGColorSpaceGenericRGB", format: .binary, options: 0)) ?? Data()
+        return [
+            "color": [
+                "color": [
+                    "_0": [
+                        "color": [
+                            "components": [0.0, 0.0, 0.0, 1.0],
+                            "colorSpace": colorSpaceData
+                        ]
+                    ]
+                ]
+            ]
+        ]
+    }
+
+    /// Builds a single slot ("Desktop" or "Idle") value for a wallpaper-extension choice.
+    /// Internal (not private) so tests can validate the structure without touching the system.
+    func makeExtensionSlotConfiguration(
+        provider: String,
+        configuration: Data,
+        optionValues: [String: Any]?
+    ) throws -> [String: Any] {
+        var content: [String: Any] = [
+            "Choices": [
+                [
+                    "Provider": provider,
+                    "Configuration": configuration,
+                    "Files": []
+                ]
+            ]
+        ]
+        // EncodedOptionValues is a binary plist of {"values": <dict>}. The system tolerates
+        // an empty values dictionary; the extension supplies its own defaults.
+        content["EncodedOptionValues"] = try plistManager.createBinaryPlist(from: ["values": optionValues ?? [:]])
+        // The system records a "$null" Shuffle sentinel; include it so the written choice is
+        // structurally complete. WallpaperAgent rejects under-specified extension choices.
+        content["Shuffle"] = "$null"
+
+        return [
+            "Content": content,
+            "LastSet": Date(),
+            "LastUse": Date()
+        ]
+    }
+
+    /// Writes the given slot configurations into every relevant section of the wallpaper
+    /// store, preserving the slot we are not setting. Handles both "all spaces" mode
+    /// (`AllSpacesAndDisplays` + `SystemDefault`) and per-space mode (each `Spaces` entry's
+    /// `Default`).
+    /// Internal (not private) so tests can validate the structure without touching the system.
+    func applyExtensionSlots(
+        to plist: [String: Any],
+        desktop: [String: Any]?,
+        idle: [String: Any]?
+    ) -> [String: Any] {
+        var modified = plist
+
+        func apply(into config: [String: Any]?) -> [String: Any] {
+            var c = config ?? [:]
+            if let desktop { c["Desktop"] = desktop }
+            if let idle { c["Idle"] = idle }
+            // Force "individual" mode and drop any "Linked" (automatic-mode) block. When no
+            // wallpaper is set the agent puts the section in linked/automatic mode
+            // (Type=linked + a Linked block with Provider "default"); leaving that in place
+            // makes the agent ignore the Desktop/Idle choices we just wrote.
+            c["Type"] = "individual"
+            c.removeValue(forKey: "Linked")
+            return c
+        }
+
+        // Top-level sections the system reads in "all spaces" mode.
+        modified["AllSpacesAndDisplays"] = apply(into: modified["AllSpacesAndDisplays"] as? [String: Any])
+        modified["SystemDefault"] = apply(into: modified["SystemDefault"] as? [String: Any])
+
+        // Per-space mode: also update each existing space's Default section.
+        if let spaces = modified["Spaces"] as? [String: Any], !spaces.isEmpty {
+            var updatedSpaces = spaces
+            for (uuid, value) in spaces {
+                guard var spaceConfig = value as? [String: Any] else { continue }
+                spaceConfig["Default"] = apply(into: spaceConfig["Default"] as? [String: Any])
+                updatedSpaces[uuid] = spaceConfig
+            }
+            modified["Spaces"] = updatedSpaces
+        }
+
+        return modified
+    }
+
+    /// Reads the provider (extension bundle ID) currently occupying the given slot,
+    /// honoring `AllSpacesAndDisplays` → `Spaces` → `SystemDefault` precedence.
+    private func currentExtensionProvider(slotKey: String) -> String? {
+        guard let plist = try? plistManager.read(at: SystemPaths.wallpaperIndexPath) else {
+            return nil
+        }
+
+        if let provider = providerInSection(plist["AllSpacesAndDisplays"] as? [String: Any], slotKey: slotKey) {
+            return provider
+        }
+
+        if let spaces = plist["Spaces"] as? [String: Any] {
+            for (_, value) in spaces {
+                if let provider = providerInSection((value as? [String: Any])?["Default"] as? [String: Any], slotKey: slotKey) {
+                    return provider
+                }
+            }
+        }
+
+        return providerInSection(plist["SystemDefault"] as? [String: Any], slotKey: slotKey)
+    }
+
+    private func providerInSection(_ section: [String: Any]?, slotKey: String) -> String? {
+        guard let slot = section?[slotKey] as? [String: Any],
+              let content = slot["Content"] as? [String: Any],
+              let choices = content["Choices"] as? [[String: Any]],
+              let provider = choices.first?["Provider"] as? String else {
+            return nil
+        }
+        return provider
+    }
+
+    /// Writes the plist, restarts WallpaperAgent, and verifies the extension took effect.
+    /// On a verification mismatch it throws (leaving the written, structurally-valid plist
+    /// in place rather than risking undoing a change that actually applied).
+    private func writeExtensionWithRollback(
+        _ plist: [String: Any],
+        to path: String,
+        restartAgent: Bool,
+        waitSeconds: Double = 3.0,
+        slot: WallpaperExtensionSlot,
+        expectedProvider: String
+    ) async throws {
+        try plistManager.write(plist, to: path)   // creates a .backup automatically
+
+        guard restartAgent else { return }
+
+        restartWallpaperAgent()
+        try await Task.sleep(nanoseconds: UInt64(waitSeconds * 1_000_000_000))
+
+        var applied = true
+        if slot.includesDesktop {
+            applied = applied && (currentExtensionProvider(slotKey: "Desktop") == expectedProvider)
+        }
+        if slot.includesScreensaver {
+            applied = applied && (currentExtensionProvider(slotKey: "Idle") == expectedProvider)
+        }
+
+        if !applied {
+            throw PaperSaverError.invalidConfiguration(
+                "Wallpaper extension '\(expectedProvider)' did not apply after WallpaperAgent restart"
+            )
+        }
+    }
+
     private func createDesktopConfiguration(with configurationData: Data, options: Data) -> [String: Any] {
         let content: [String: Any] = [
             "Choices": [

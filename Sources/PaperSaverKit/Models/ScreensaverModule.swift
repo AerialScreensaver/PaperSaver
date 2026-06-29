@@ -66,7 +66,7 @@ public enum ScreensaverType: String, Codable, CaseIterable {
         case .appExtension:
             return "com.apple.NeptuneOneExtension"
         case .sequoiaVideo:
-            return "com.apple.wallpaper.choice.sequoia"
+            return "com.apple.wallpaper.choice.aerials"
         case .builtInMac:
             return "com.apple.wallpaper.choice.macintosh"
         case .defaultScreen:

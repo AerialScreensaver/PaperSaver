@@ -20,6 +20,7 @@ struct PaperSaver: AsyncParsableCommand {
             GetSpace.self,
             SetSaver.self,
             SetPaper.self,
+            WallpaperExtensionCommand.self,
             RestoreBackup.self,
         ]
     )
@@ -603,6 +604,106 @@ struct SetPaper: AsyncParsableCommand {
             options: options
         )
         print("\u{2705} Successfully set wallpaper for space \(spaceUUID)")
+    }
+}
+
+// MARK: - WallpaperExtension Command
+
+struct WallpaperExtensionCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "wallpaper-extension",
+        abstract: "Set or read a wallpaper/screensaver extension by bundle identifier (macOS 14+)",
+        subcommands: [WallpaperExtensionSet.self, WallpaperExtensionGet.self],
+        defaultSubcommand: WallpaperExtensionGet.self
+    )
+}
+
+struct WallpaperExtensionSet: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "set",
+        abstract: "Activate a wallpaper/screensaver extension by bundle identifier"
+    )
+
+    @Argument(help: "Extension bundle identifier (e.g. com.example.App.MyWallpaperExtension)")
+    var bundleID: String
+
+    @Option(name: .long, help: "Configuration token stored with the choice (plain string). Default: empty.")
+    var config: String?
+
+    @Option(name: .long, help: "Slot to occupy: desktop, screensaver, or both (default: both)")
+    var slot: String = "both"
+
+    @Flag(name: .customLong("no-restart"), help: "Skip WallpaperAgent restart and verification")
+    var noRestart = false
+
+    func run() async throws {
+        guard #available(macOS 14.0, *) else {
+            printError("Error: Wallpaper extensions require macOS 14.0 (Sonoma) or later")
+            throw ExitCode.failure
+        }
+
+        let resolvedSlot: WallpaperExtensionSlot
+        switch slot.lowercased() {
+        case "desktop": resolvedSlot = .desktop
+        case "screensaver", "idle": resolvedSlot = .screensaver
+        case "both": resolvedSlot = .both
+        default:
+            throw ValidationError("Invalid --slot '\(slot)'. Use desktop, screensaver, or both.")
+        }
+
+        let configuration = Data((config ?? "").utf8)
+        let paperSaver = PaperSaverKit.PaperSaver()
+
+        do {
+            try await paperSaver.setWallpaperExtension(
+                bundleID: bundleID,
+                configuration: configuration,
+                slot: resolvedSlot,
+                optionValues: nil,
+                skipRestart: noRestart
+            )
+            print("\u{2705} Set wallpaper extension '\(bundleID)' (slot: \(slot))")
+        } catch {
+            printError("Failed to set wallpaper extension: \(error.localizedDescription)")
+            throw ExitCode.failure
+        }
+    }
+}
+
+struct WallpaperExtensionGet: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "get",
+        abstract: "Show the extension(s) currently set as wallpaper / screensaver"
+    )
+
+    @Flag(name: .shortAndLong, help: "Output in JSON format")
+    var json = false
+
+    func run() async throws {
+        guard #available(macOS 14.0, *) else {
+            printError("Error: Wallpaper extensions require macOS 14.0 (Sonoma) or later")
+            throw ExitCode.failure
+        }
+
+        let paperSaver = PaperSaverKit.PaperSaver()
+        let wallpaper = paperSaver.getCurrentWallpaperExtension()
+        let screensaver = paperSaver.getCurrentScreensaverExtension()
+
+        if json {
+            let dict: [String: Any] = [
+                "wallpaper": wallpaper ?? NSNull(),
+                "screensaver": screensaver ?? NSNull()
+            ]
+            if let data = try? JSONSerialization.data(withJSONObject: dict, options: [.prettyPrinted, .sortedKeys]),
+               let string = String(data: data, encoding: .utf8) {
+                print(string)
+            } else {
+                print("{}")
+            }
+        } else {
+            print("Desktop wallpaper extension: \(wallpaper ?? "(none)")")
+            print("Screensaver extension:       \(screensaver ?? "(none)")")
+        }
     }
 }
 
@@ -1268,7 +1369,7 @@ func getWallpaperForSpace(spaceUUID: String, debug: Bool = false) -> String? {
         switch providerName {
         case "com.apple.wallpaper.choice.dynamic":
             return "Dynamic Wallpaper"
-        case "com.apple.wallpaper.choice.sequoia":
+        case "com.apple.wallpaper.choice.aerials":
             return "Sequoia Video"
         case "com.apple.wallpaper.choice.macintosh":
             return "Classic Mac"

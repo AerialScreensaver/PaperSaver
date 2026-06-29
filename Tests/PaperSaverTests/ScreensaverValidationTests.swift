@@ -1,5 +1,5 @@
 import XCTest
-@testable import PaperSaver
+@testable import PaperSaverKit
 
 /// Validation tests that check our static lists and assumptions against the actual system
 /// These tests are useful for detecting when macOS updates add/remove screensavers
@@ -125,7 +125,7 @@ final class ScreensaverValidationTests: XCTestCase {
         let knownProviders = [
             "com.apple.wallpaper.choice.screen-saver",
             "com.apple.NeptuneOneExtension",
-            "com.apple.wallpaper.choice.sequoia",
+            "com.apple.wallpaper.choice.aerials",
             "com.apple.wallpaper.choice.macintosh",
             "default"
         ]
@@ -286,7 +286,7 @@ final class ScreensaverValidationTests: XCTestCase {
         switch provider {
         case "com.apple.wallpaper.choice.screen-saver",
              "com.apple.NeptuneOneExtension",
-             "com.apple.wallpaper.choice.sequoia",
+             "com.apple.wallpaper.choice.aerials",
              "com.apple.wallpaper.choice.macintosh",
              "com.apple.wallpaper.choice.image",
              "com.apple.wallpaper.choice.dynamic",

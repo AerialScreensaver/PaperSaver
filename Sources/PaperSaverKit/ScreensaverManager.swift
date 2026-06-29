@@ -215,15 +215,19 @@ public class ScreensaverManager: ScreensaverManaging {
         if let allSpacesAndDisplays = plist["AllSpacesAndDisplays"] as? [String: Any] {
             var hasValidScreensaverData = false
 
-            // Check if AllSpacesAndDisplays.Idle has non-empty configuration
+            // Check if AllSpacesAndDisplays.Idle has valid screensaver data
             if let idle = allSpacesAndDisplays["Idle"] as? [String: Any],
                let content = idle["Content"] as? [String: Any],
                let choices = content["Choices"] as? [[String: Any]],
-               let firstChoice = choices.first,
-               let configurationData = firstChoice["Configuration"] as? Data,
-               !configurationData.isEmpty {
-                // AllSpacesAndDisplays.Idle has valid screensaver data
-                hasValidScreensaverData = true
+               let firstChoice = choices.first {
+                if let configurationData = firstChoice["Configuration"] as? Data,
+                   !configurationData.isEmpty {
+                    hasValidScreensaverData = true
+                } else if let provider = firstChoice["Provider"] as? String,
+                          provider == ScreensaverType.builtInMac.providerIdentifier {
+                    // Built-in Mac screensavers have empty configuration by design
+                    hasValidScreensaverData = true
+                }
             }
 
             // Also check if AllSpacesAndDisplays.Linked has non-empty configuration (Automatic mode)
@@ -231,11 +235,14 @@ public class ScreensaverManager: ScreensaverManaging {
                let linked = allSpacesAndDisplays["Linked"] as? [String: Any],
                let content = linked["Content"] as? [String: Any],
                let choices = content["Choices"] as? [[String: Any]],
-               let firstChoice = choices.first,
-               let configurationData = firstChoice["Configuration"] as? Data,
-               !configurationData.isEmpty {
-                // AllSpacesAndDisplays.Linked has valid screensaver data (Automatic mode)
-                hasValidScreensaverData = true
+               let firstChoice = choices.first {
+                if let configurationData = firstChoice["Configuration"] as? Data,
+                   !configurationData.isEmpty {
+                    hasValidScreensaverData = true
+                } else if let provider = firstChoice["Provider"] as? String,
+                          provider == ScreensaverType.builtInMac.providerIdentifier {
+                    hasValidScreensaverData = true
+                }
             }
 
             if hasValidScreensaverData {
@@ -271,19 +278,26 @@ public class ScreensaverManager: ScreensaverManaging {
         if let idle = config["Idle"] as? [String: Any],
            let content = idle["Content"] as? [String: Any],
            let choices = content["Choices"] as? [[String: Any]],
-           let firstChoice = choices.first,
-           let configurationData = firstChoice["Configuration"] as? Data {
+           let firstChoice = choices.first {
 
-            // Use the new type-aware decoding method
-            if let (name, _) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
-                if let screensaverName = name {
-                    return screensaverName
-                }
+            // Check for built-in Mac screensavers (empty configuration, identified by provider)
+            if let provider = firstChoice["Provider"] as? String,
+               provider == ScreensaverType.builtInMac.providerIdentifier {
+                return ScreensaverType.builtInMac.displayName
             }
 
-            // Fallback to old method for compatibility
-            if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
-                return moduleName
+            if let configurationData = firstChoice["Configuration"] as? Data {
+                // Use the new type-aware decoding method
+                if let (name, _) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                    if let screensaverName = name {
+                        return screensaverName
+                    }
+                }
+
+                // Fallback to old method for compatibility
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    return moduleName
+                }
             }
         }
 
@@ -295,10 +309,12 @@ public class ScreensaverManager: ScreensaverManaging {
 
             // Check the Provider to determine if this is Automatic mode (wallpaper as screensaver)
             if let provider = firstChoice["Provider"] as? String {
+                let screensaverProviders = Set(ScreensaverType.allCases.map { $0.providerIdentifier })
                 // In Automatic mode, the provider is a wallpaper provider, not a screensaver
-                if provider == "com.apple.wallpaper.choice.image" ||
-                   provider == "com.apple.wallpaper.choice.dynamic" ||
-                   provider.starts(with: "com.apple.wallpaper.") {
+                if !screensaverProviders.contains(provider) &&
+                   (provider == "com.apple.wallpaper.choice.image" ||
+                    provider == "com.apple.wallpaper.choice.dynamic" ||
+                    provider.starts(with: "com.apple.wallpaper.")) {
                     return "Automatic"
                 }
             }
@@ -325,19 +341,26 @@ public class ScreensaverManager: ScreensaverManaging {
            let idle = defaultConfig["Idle"] as? [String: Any],
            let content = idle["Content"] as? [String: Any],
            let choices = content["Choices"] as? [[String: Any]],
-           let firstChoice = choices.first,
-           let configurationData = firstChoice["Configuration"] as? Data {
+           let firstChoice = choices.first {
 
-            // Use the new type-aware decoding method
-            if let (name, _) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
-                if let screensaverName = name {
-                    return screensaverName
-                }
+            // Check for built-in Mac screensavers (empty configuration, identified by provider)
+            if let provider = firstChoice["Provider"] as? String,
+               provider == ScreensaverType.builtInMac.providerIdentifier {
+                return ScreensaverType.builtInMac.displayName
             }
 
-            // Fallback to old method for compatibility
-            if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
-                return moduleName
+            if let configurationData = firstChoice["Configuration"] as? Data {
+                // Use the new type-aware decoding method
+                if let (name, _) = try? plistManager.decodeScreensaverConfigurationWithType(from: configurationData) {
+                    if let screensaverName = name {
+                        return screensaverName
+                    }
+                }
+
+                // Fallback to old method for compatibility
+                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                    return moduleName
+                }
             }
         }
 
@@ -411,11 +434,18 @@ public class ScreensaverManager: ScreensaverManaging {
                let idle = displayConfig["Idle"] as? [String: Any],
                let content = idle["Content"] as? [String: Any],
                let choices = content["Choices"] as? [[String: Any]],
-               let firstChoice = choices.first,
-               let configurationData = firstChoice["Configuration"] as? Data {
+               let firstChoice = choices.first {
 
-                if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
-                    return moduleName
+                // Check for built-in Mac screensavers (empty configuration, identified by provider)
+                if let provider = firstChoice["Provider"] as? String,
+                   provider == ScreensaverType.builtInMac.providerIdentifier {
+                    return ScreensaverType.builtInMac.displayName
+                }
+
+                if let configurationData = firstChoice["Configuration"] as? Data {
+                    if let moduleName = try? plistManager.decodeScreensaverConfiguration(from: configurationData) {
+                        return moduleName
+                    }
                 }
             }
 

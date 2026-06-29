@@ -1,5 +1,5 @@
 import XCTest
-@testable import PaperSaver
+@testable import PaperSaverKit
 
 /// Debug and analysis tests - not meant to be run automatically
 /// These tests are for debugging and exploring the system
@@ -299,7 +299,7 @@ final class ScreensaverDebugTests: XCTestCase {
             return .traditional
         case "com.apple.NeptuneOneExtension":
             return .appExtension
-        case "com.apple.wallpaper.choice.sequoia":
+        case "com.apple.wallpaper.choice.aerials":
             return .sequoiaVideo
         case "com.apple.wallpaper.choice.macintosh":
             return .builtInMac

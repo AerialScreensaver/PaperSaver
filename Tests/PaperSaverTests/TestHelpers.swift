@@ -1,6 +1,6 @@
 import XCTest
 import Foundation
-@testable import PaperSaver
+@testable import PaperSaverKit
 
 /// Helper utilities for PaperSaver tests
 enum TestHelpers {
