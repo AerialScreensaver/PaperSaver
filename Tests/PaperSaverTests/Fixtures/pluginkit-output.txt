@@ -1,0 +1,17 @@
+     com.apple.Flurry(1.0)	12B40406-5A88-5F28-9618-96A88A199F51	2026-10-13 20:36:35 +0000	/System/Library/ExtensionKit/Extensions/Flurry.appex
+     com.apple.Shell(1.0)	25C114E1-43A8-501F-A532-0077C8778656	2026-10-13 20:36:33 +0000	/System/Library/ExtensionKit/Extensions/Shell.appex
+     com.apple.Arabesque(1.0)	AA021E0E-C829-5513-92A2-39FC2A1613C6	2026-10-13 20:36:37 +0000	/System/Library/ExtensionKit/Extensions/Arabesque.appex
+     net.aerialscreensaver.AppexSaverMinimal.Extension(1.0)	B94292A8-C0FA-483C-A805-F8A77E3667CA	2026-10-18 14:08:24 +0000	/Users/user/Library/Developer/Xcode/DerivedData/AppexSaverMinimal-hcyvwanwvjthnnendkfmnclcnoef/Build/Products/Debug/AppexSaverMinimal.app/Contents/PlugIns/AppexSaverMinimalExtension.appex
+     com.glouel.Aerial-App.AerialScreenSaverExtension(4.0.16)	C83A4EA9-6D95-45F5-B3C6-A742264911EC	2026-10-05 22:20:02 +0000	/Users/user/dev/private/AerialCompanion-unified/build/Release/Aerial.xcarchive/Products/Applications/Aerial.app/Contents/PlugIns/AerialScreenSaverExtension.appex
+     com.apple.ScreenSaver.Drift(1.0)	9D5CBAC2-4FC0-5A42-8140-4C27C0EBBD38	2026-10-13 20:36:36 +0000	/System/Library/ExtensionKit/Extensions/Drift.appex
+     com.apple.ScreenSaver.Engine.legacyScreenSaver(1.0)	622707CF-D419-5EC7-83D8-CD3923F52F70	2026-10-13 20:36:36 +0000	/System/Library/Frameworks/ScreenSaver.framework/PlugIns/legacyScreenSaver.appex
+     com.apple.WordOfTheDay(1.0)	92168C30-135F-58ED-AA2F-F26998B884AE	2026-10-13 20:36:34 +0000	/System/Library/ExtensionKit/Extensions/Word of the Day.appex
+     com.apple.ScreenSaver.Computer-Name(1.0)	DFFF0EB4-0174-5F35-8EC6-1E4F3C25E0BB	2026-10-13 20:36:33 +0000	/System/Library/ExtensionKit/Extensions/Computer Name.appex
+     com.apple.screensaver.AlbumArtwork(1.0)	DB8D4C4D-FF99-50DE-914B-7BB65AD5451C	2026-10-13 20:36:37 +0000	/System/Library/ExtensionKit/Extensions/Album Artwork.appex
+     com.apple.ScreenSaver.Monterey(1.0)	AE8E4A3A-B67B-5468-9D18-8F628A60F655	2026-10-13 20:36:34 +0000	/System/Library/ExtensionKit/Extensions/Monterey.appex
+     com.apple.ScreenSaver.Engine.legacyScreenSaver.x86-64(1.0)	DA78FAFB-AADD-5BC8-ACDE-A7A1DDAA2595	2026-10-13 20:36:33 +0000	/System/Library/Frameworks/ScreenSaver.framework/PlugIns/legacyScreenSaver-x86_64.appex
+     com.apple.ScreenSaver.iLife-Slideshow-Extension(1.0)	3AFAA723-1047-5D62-8852-F6389E935255	2026-10-13 20:36:35 +0000	/System/Library/ExtensionKit/Extensions/iLifeSlideshows.appex
+     com.apple.ScreenSaver.Hello(1.0)	141DA905-F1DF-5969-88C2-0B0DAE167AEF	2026-10-13 20:36:35 +0000	/System/Library/ExtensionKit/Extensions/Hello.appex
+     com.apple.ScreenSaver.Ventura(1.0)	3F5F30E8-D6AD-5C69-891C-83EE937C23AE	2026-10-13 20:36:37 +0000	/System/Library/ExtensionKit/Extensions/Ventura.appex
+     com.glouel.screensaver.AppexSaver.AppexSaverExtension(1.0)	99AF9D0E-E339-49F7-9792-22D4242FDD11	2026-10-05 22:19:53 +0000	/Applications/AppexSaver.app/Contents/PlugIns/AppexSaverExtension.appex
+ (16 plug-ins)

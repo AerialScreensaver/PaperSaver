@@ -1,51 +1,59 @@
 import Foundation
 
-public enum PaperSaverError: LocalizedError {
-    case unsupportedOperation(String)
+/// Every error the library throws.
+public enum PaperSaverError: LocalizedError, Sendable {
+    /// The store, its backup or an image file does not exist.
     case fileNotFound(URL)
-    case permissionDenied(String)
-    case invalidConfiguration(String)
+    /// The store could not be read or is not a property-list dictionary.
     case plistReadError(String)
+    /// The store, its backup or a preference could not be written.
     case plistWriteError(String)
+    /// A value handed to the library does not fit the store format.
+    case invalidConfiguration(String)
+    /// No `.saver` or `.appex` bundle has that name.
     case screensaverNotFound(String)
-    case spaceNotFound
-    case displayNotFound(Int)
-    case spaceNotFoundOnDisplay(displayNumber: Int, spaceNumber: Int)
-    case sonomaRequired
-    case invalidScreenIdentifier
-    case systemVersionDetectionFailed
-    case unknownError(Error)
-    
+    /// No Space has that UUID or number.
+    case spaceNotFound(String)
+    /// No display has that UUID or number.
+    case displayNotFound(String)
+    /// WallpaperAgent did not keep the written choice after its restart.
+    case verificationFailed(expected: String, rolledBack: Bool)
+    /// `killall WallpaperAgent` failed or no new agent appeared.
+    case agentRestartFailed(String)
+    /// `pluginkit` could not be run or reported an error.
+    case pluginkitFailed(String)
+    /// No wallpaper extension (`com.apple.wallpaper` extension point) is registered with that
+    /// bundle identifier. `hint` says what the identifier is instead, when it is known.
+    case wallpaperExtensionNotFound(bundleID: String, hint: String?)
+    /// The running macOS lacks something the operation needs.
+    case unsupportedOperation(String)
+
     public var errorDescription: String? {
         switch self {
-        case .unsupportedOperation(let operation):
-            return "Unsupported operation: \(operation)"
         case .fileNotFound(let url):
             return "File not found: \(url.path)"
-        case .permissionDenied(let reason):
-            return "Permission denied: \(reason)"
+        case .plistReadError(let details):
+            return "Failed to read property list: \(details)"
+        case .plistWriteError(let details):
+            return "Failed to write property list: \(details)"
         case .invalidConfiguration(let details):
             return "Invalid configuration: \(details)"
-        case .plistReadError(let path):
-            return "Failed to read plist: \(path)"
-        case .plistWriteError(let path):
-            return "Failed to write plist: \(path)"
         case .screensaverNotFound(let name):
             return "Screensaver not found: \(name)"
-        case .spaceNotFound:
-            return "Space not found"
-        case .displayNotFound(let displayNumber):
-            return "Display \(displayNumber) not found"
-        case .spaceNotFoundOnDisplay(let displayNumber, let spaceNumber):
-            return "Space \(spaceNumber) not found on Display \(displayNumber)"
-        case .sonomaRequired:
-            return "This feature requires macOS 14.0 (Sonoma) or later"
-        case .invalidScreenIdentifier:
-            return "Invalid screen identifier provided"
-        case .systemVersionDetectionFailed:
-            return "Failed to detect macOS version"
-        case .unknownError(let error):
-            return "Unknown error: \(error.localizedDescription)"
+        case .spaceNotFound(let which):
+            return "Space not found: \(which)"
+        case .displayNotFound(let which):
+            return "Display not found: \(which)"
+        case .verificationFailed(let expected, let rolledBack):
+            return "WallpaperAgent did not keep the written choice (\(expected))" + (rolledBack ? "; the previous store was restored" : "")
+        case .agentRestartFailed(let reason):
+            return "Could not restart WallpaperAgent: \(reason)"
+        case .pluginkitFailed(let output):
+            return "pluginkit failed: \(output)"
+        case .wallpaperExtensionNotFound(let bundleID, let hint):
+            return "No wallpaper extension is registered as \(bundleID)" + (hint.map { ". \($0)" } ?? ". `pluginkit -m -v -p com.apple.wallpaper` lists the registered ones.")
+        case .unsupportedOperation(let details):
+            return "Unsupported operation: \(details)"
         }
     }
 }

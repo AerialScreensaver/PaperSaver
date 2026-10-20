@@ -7,7 +7,7 @@ import CoreGraphics
 /// details about its identity, associated displays, and current status.
 /// Spaces allow users to organize windows and applications across multiple
 /// virtual desktops.
-public struct SpaceInfo: Codable, Equatable {
+public struct SpaceInfo: Codable, Equatable, Sendable {
     /// The unique identifier for this space.
     ///
     /// A UUID string that uniquely identifies this space across the system.
@@ -108,7 +108,7 @@ public struct SpaceInfo: Codable, Equatable {
 /// This struct contains comprehensive information about a physical display,
 /// including both currently connected displays and historical display
 /// configurations that macOS remembers for future reconnection.
-public struct DisplayInfo: Equatable {
+public struct DisplayInfo: Equatable, Sendable, Codable {
     /// The unique identifier for this display.
     ///
     /// A UUID string that uniquely identifies this display across
@@ -221,7 +221,7 @@ public struct DisplayInfo: Equatable {
     /// - Returns: Formatted specification string (e.g., "3008x1692 @ 60Hz @ 2x").
     public var displayDescription: String {
         if let resolution = resolution {
-            let scaleText = (scale ?? 1) > 1 ? " @ \(scale!)x" : ""
+            let scaleText = (scale ?? 1) > 1 ? " @ \(scale ?? 1)x" : ""
             let refreshText = refreshRate.map { " @ \($0)Hz" } ?? ""
             return "\(Int(resolution.width))x\(Int(resolution.height))\(refreshText)\(scaleText)"
         } else if let frame = frame {
@@ -258,47 +258,3 @@ public struct DisplayInfo: Equatable {
     }
     
 }
-
-extension DisplayInfo: Codable {
-    private enum CodingKeys: String, CodingKey {
-        case uuid
-        case displayID
-        case frame
-        case isMain
-        case isConnected
-        case resolution
-        case refreshRate
-        case scale
-        case configVersion
-        case displayName
-    }
-    
-    public init(from decoder: Decoder) throws {
-        let container = try decoder.container(keyedBy: CodingKeys.self)
-        uuid = try container.decode(String.self, forKey: .uuid)
-        displayID = try container.decodeIfPresent(UInt32.self, forKey: .displayID)
-        frame = try container.decodeIfPresent(CGRect.self, forKey: .frame)
-        isMain = try container.decode(Bool.self, forKey: .isMain)
-        isConnected = try container.decode(Bool.self, forKey: .isConnected)
-        resolution = try container.decodeIfPresent(CGSize.self, forKey: .resolution)
-        refreshRate = try container.decodeIfPresent(Int.self, forKey: .refreshRate)
-        scale = try container.decodeIfPresent(Int.self, forKey: .scale)
-        configVersion = try container.decodeIfPresent(Int.self, forKey: .configVersion)
-        displayName = try container.decodeIfPresent(String.self, forKey: .displayName)
-    }
-    
-    public func encode(to encoder: Encoder) throws {
-        var container = encoder.container(keyedBy: CodingKeys.self)
-        try container.encode(uuid, forKey: .uuid)
-        try container.encodeIfPresent(displayID, forKey: .displayID)
-        try container.encodeIfPresent(frame, forKey: .frame)
-        try container.encode(isMain, forKey: .isMain)
-        try container.encode(isConnected, forKey: .isConnected)
-        try container.encodeIfPresent(resolution, forKey: .resolution)
-        try container.encodeIfPresent(refreshRate, forKey: .refreshRate)
-        try container.encodeIfPresent(scale, forKey: .scale)
-        try container.encodeIfPresent(configVersion, forKey: .configVersion)
-        try container.encodeIfPresent(displayName, forKey: .displayName)
-    }
-}
-

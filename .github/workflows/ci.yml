@@ -1,0 +1,33 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+    tags: ['*']
+  pull_request:
+
+jobs:
+  build-and-test:
+    name: Build and test (${{ matrix.runner }})
+    runs-on: ${{ matrix.runner }}
+    strategy:
+      fail-fast: false
+      matrix:
+        # macos-15 ships Xcode 16 (Swift 6.0/6.1), the oldest toolchain the manifest supports.
+        # macos-26 ships Xcode 26.
+        runner: [macos-15, macos-26]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Toolchain
+        run: |
+          xcodebuild -version
+          swift --version
+      - name: Build
+        run: swift build -v
+      - name: Build CLI (release)
+        run: swift build -c release --product papersaver
+      - name: Test
+        # Live suites skip unless PAPERSAVER_INTEGRATION / PAPERSAVER_MUTATION are set.
+        run: swift test
+      - name: CLI smoke
+        run: .build/release/papersaver --version

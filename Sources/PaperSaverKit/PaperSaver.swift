@@ -1,592 +1,485 @@
 import Foundation
 import AppKit
 
-public class PaperSaver {
-    private let screensaverManager: ScreensaverManaging
-    private let wallpaperManager: WallpaperManaging
+/// Settings for a `PaperSaver` instance.
+public struct PaperSaverConfiguration: Sendable {
+    /// The store to read and write. Defaults to the current user's.
+    public var storeURL: URL = SystemPaths.wallpaperStoreURL
+    /// How writes restart the agent and verify the result.
+    public var writeOptions: WriteOptions = .default
+    public var log: PaperSaverLog = .os
+    /// How long a pluginkit listing is reused.
+    public var pluginkitCacheTTL: Duration = .seconds(5)
+    /// How a screensaver-only write represents the missing desktop choice.
+    public var screensaverOnlyStrategy: ScreensaverOnlyStrategy = .automatic
+    /// Refuse `setWallpaperExtension` for a bundle identifier that is not registered on the
+    /// `com.apple.wallpaper` extension point. The agent stores any provider string without
+    /// complaint and then fails to render it ("no provider found"), so the check runs first.
+    public var validatesWallpaperExtensions = true
+    /// The choice written to clear a slot. Injectable for tests and for callers with their own
+    /// idea of a default.
+    public var systemDefault: SystemDefaultProvider = SystemDefaults.slot
 
-    // MARK: - Initialization
+    public init() {}
+}
 
-    public init() {
-        self.screensaverManager = ScreensaverManager()
-        self.wallpaperManager = WallpaperManager()
+/// A display, for reads and for `NSWorkspace` writes.
+public enum DisplayTarget: Sendable, Equatable {
+    /// Every connected display; for reads, the store's shared sections.
+    case all
+    case main
+    case uuid(String)
+    case displayID(CGDirectDisplayID)
+
+    @MainActor
+    public init(screen: NSScreen) {
+        if let identifier = ScreenIdentifier(from: screen) {
+            self = .displayID(identifier.displayID)
+        } else {
+            self = .main
+        }
     }
 
-    public init(
-        screensaverManager: ScreensaverManaging = ScreensaverManager(),
-        wallpaperManager: WallpaperManaging = WallpaperManager()
-    ) {
-        self.screensaverManager = screensaverManager
-        self.wallpaperManager = wallpaperManager
+    /// The display UUID, or `nil` for `.all` and for a display that is not connected.
+    public var uuid: String? {
+        switch self {
+        case .all: return nil
+        case .main: return DisplayUUID.main
+        case .uuid(let uuid): return uuid
+        case .displayID(let id): return DisplayUUID.uuid(for: id)
+        }
     }
 
-    // MARK: - Screensaver Management
+    var storeTarget: StoreTarget {
+        uuid.map { .display(uuid: $0) } ?? .everywhere
+    }
+}
 
-    // MARK: Core Screensaver Operations
+/// The library's entry point.
+///
+/// Reads are synchronous and only touch the store file. Writes rewrite the store, restart
+/// `WallpaperAgent` (which reads the store only at launch), wait for it to settle, read the
+/// store back and roll back when the agent did not keep the change.
+public final class PaperSaver: Sendable {
+    public let configuration: PaperSaverConfiguration
+    let file: StoreFile
+    let agent: any WallpaperAgentControlling
+    let catalog: PluginkitCatalog
+    let wallpaperCatalog: PluginkitCatalog
 
-    /// Returns a list of all available screensaver modules on the system.
-    ///
-    /// This function scans both system and user screensaver directories to find
-    /// all installed screensaver modules, including traditional `.saver` files
-    /// and modern App Extension screensavers.
-    ///
-    /// - Returns: An array of `ScreensaverModule` objects containing details about
-    ///   each available screensaver, including name, type, and file path.
-    /// - Note: The list includes both system screensavers (built into macOS) and
-    ///   user-installed screensavers.
-    public func listAvailableScreensavers() -> [ScreensaverModule] {
-        return screensaverManager.listAvailableScreensavers()
+    public convenience init(configuration: PaperSaverConfiguration = PaperSaverConfiguration()) {
+        self.init(configuration: configuration, agent: WallpaperAgent())
     }
 
-    /// Gets the currently active screensaver for a specific screen.
-    ///
-    /// This function retrieves information about the screensaver currently
-    /// configured for the specified screen. It handles both single-screen
-    /// and multi-screen configurations automatically.
-    ///
-    /// - Parameter screen: The target screen to query. If `nil`, uses the
-    ///   current screen or main screen.
-    /// - Returns: A `ScreensaverInfo` object with details about the active
-    ///   screensaver, or `nil` if no screensaver is configured.
-    /// - Note: On single-screen systems, the screen parameter is typically ignored.
-    public func getActiveScreensaver(for screen: NSScreen? = nil) -> ScreensaverInfo? {
-        return screensaverManager.getActiveScreensaver(for: screen)
+    init(configuration: PaperSaverConfiguration, agent: any WallpaperAgentControlling) {
+        self.configuration = configuration
+        self.file = StoreFile(url: configuration.storeURL)
+        self.agent = agent
+        self.catalog = PluginkitCatalog(ttl: configuration.pluginkitCacheTTL)
+        self.wallpaperCatalog = PluginkitCatalog(extensionPoint: PluginkitCatalog.wallpaperExtensionPoint, ttl: configuration.pluginkitCacheTTL)
     }
 
-    /// Gets the names of all currently active screensavers across all screens and spaces.
-    ///
-    /// This function returns a comprehensive list of screensaver names that are
-    /// currently configured across all displays and spaces in the system.
-    /// Useful for getting an overview of the current screensaver configuration.
-    ///
-    /// - Returns: An array of screensaver names currently active in the system.
-    ///   The array may contain duplicates if the same screensaver is used in
-    ///   multiple locations.
-    /// - Note: This function works across all spaces and displays, providing
-    ///   a system-wide view of active screensavers.
+    private var log: PaperSaverLog { configuration.log }
+    private var writer: StoreWriter { StoreWriter(file: file, agent: agent, log: log) }
+
+    // MARK: - Discovery
+
+    /// Every screensaver installed on the Mac: app extensions registered with pluginkit and
+    /// `.saver` plug-ins in the standard directories.
+    public func listAvailableScreensavers() async -> [ScreensaverModule] {
+        var modules: [ScreensaverModule] = []
+        if let extensions = try? await catalog.extensions() {
+            for ext in extensions where !ext.bundleIdentifier.contains("legacyScreenSaver") {
+                modules.append(ScreensaverModule(
+                    name: ext.displayName, identifier: ext.path.lastPathComponent, path: ext.path,
+                    type: .appExtension, isSystem: ext.isSystem, bundleIdentifier: ext.bundleIdentifier))
+            }
+        }
+        modules.append(contentsOf: Self.traditionalScreensavers())
+        return modules
+    }
+
+    static func traditionalScreensavers() -> [ScreensaverModule] {
+        var modules: [ScreensaverModule] = []
+        for directory in SystemPaths.screensaverModulesDirectories() {
+            guard let enumerator = FileManager.default.enumerator(
+                at: directory, includingPropertiesForKeys: [.isDirectoryKey],
+                options: [.skipsHiddenFiles, .skipsPackageDescendants]) else { continue }
+            for case let url as URL in enumerator where url.pathExtension.lowercased() == "saver" {
+                if url.path.contains("Default Collections") { continue }
+                modules.append(ScreensaverModule(
+                    name: url.deletingPathExtension().lastPathComponent, identifier: url.lastPathComponent,
+                    path: url, type: .traditional, isSystem: url.path.hasPrefix("/System/")))
+            }
+        }
+        return modules
+    }
+
+    // MARK: - Reading the store
+
+    /// The whole store, typed.
+    public func readStore() throws -> WallpaperStore {
+        try file.read()
+    }
+
+    /// The names of the screensavers selected anywhere in the store, sorted. A name is the
+    /// module's file name without extension, or a wallpaper extension's bundle identifier.
     public func getActiveScreensavers() -> [String] {
-        return screensaverManager.getActiveScreensavers()
+        ((try? file.read())?.screensaverNames() ?? []).sorted()
     }
 
-    /// Sets the screensaver for a specific screen.
-    ///
-    /// This function configures the specified screensaver module for the given
-    /// screen. The operation is asynchronous and may take a moment to complete
-    /// as the system updates its configuration.
+    /// The screensaver selected for `target`.
+    public func activeScreensaver(in target: StoreTarget = .everywhere) -> ScreensaverInfo? {
+        guard let slot = (try? file.read())?.slot(.screensaver, in: target) else { return nil }
+        var displayUUID: String?
+        if case .display(let uuid) = target { displayUUID = uuid }
+        return ScreensaverInfo(slot: slot, displayUUID: displayUUID)
+    }
+
+    /// The screensaver selected for a display, or for the store's shared sections with `.all`.
+    public func getActiveScreensaver(for display: DisplayTarget = .all) -> ScreensaverInfo? {
+        activeScreensaver(in: display.storeTarget)
+    }
+
+    /// The choice in `slot` for `target`.
+    public func currentWallpaperChoice(slot: WallpaperSlot, in target: StoreTarget = .everywhere) -> SlotConfiguration? {
+        (try? file.read())?.slot(slot, in: target)
+    }
+
+    /// The bundle identifier of the wallpaper extension set as the desktop wallpaper, or `nil`
+    /// when the desktop is not a third-party extension.
+    public func getCurrentWallpaperExtension(in target: StoreTarget = .everywhere) -> String? {
+        extensionProvider(slot: .desktop, in: target)
+    }
+
+    /// The bundle identifier of the wallpaper extension set as the screensaver, or `nil`.
+    public func getCurrentScreensaverExtension(in target: StoreTarget = .everywhere) -> String? {
+        extensionProvider(slot: .screensaver, in: target)
+    }
+
+    private func extensionProvider(slot: WallpaperSlot, in target: StoreTarget) -> String? {
+        guard let provider = (try? file.read())?.provider(of: slot, in: target), provider.isThirdPartyExtension else { return nil }
+        return provider.rawValue
+    }
+
+    // MARK: - Screensavers
+
+    /// Selects a `.saver` or app-extension screensaver by name (its bundle's file name without
+    /// extension) for `target`, leaving the desktop wallpaper alone.
+    @discardableResult
+    public func setScreensaver(module: String, target: StoreTarget = .everywhere, options: WriteOptions? = nil) async throws -> WriteOutcome {
+        guard let moduleURL = await ModuleLocator.locate(module: module, catalog: catalog) else {
+            throw PaperSaverError.screensaverNotFound(module)
+        }
+        let choice = SlotConfiguration(
+            choice: try WallpaperChoice(provider: .screenSaver, configuration: .screenSaver(moduleURL: moduleURL)),
+            optionValues: .null, shuffle: .null)
+        let strategy = configuration.screensaverOnlyStrategy
+        let systemDefault = configuration.systemDefault
+        let topology = Self.topology(for: target)
+        let modulePath = moduleURL.path
+        return try await writer.apply(
+            expectation: "screensaver \(module) in \(target)",
+            options: options ?? configuration.writeOptions,
+            edit: { try $0.setting(.screensaver, to: choice, in: target, otherSlot: .keep, strategy: strategy,
+                                   systemDefault: systemDefault, topology: topology) },
+            verify: { store in
+                if case .screenSaver(let url)? = store.slot(.screensaver, in: target)?.configuration { return url.path == modulePath }
+                return false
+            })
+    }
+
+    /// Selects a screensaver by name for every display and Space.
+    public func setScreensaverEverywhere(module: String, skipRestart: Bool = false) async throws {
+        try await setScreensaver(module: module, target: .everywhere, options: skipRestart ? .noRestart : nil)
+    }
+
+    // MARK: - Wallpaper extensions
+
+    /// Puts a wallpaper extension (an app extension on the `com.apple.wallpaper` extension
+    /// point) in `slot`, identified by its bundle identifier.
     ///
     /// - Parameters:
-    ///   - module: The name of the screensaver module to activate. Must match
-    ///     an available screensaver from `listAvailableScreensavers()`.
-    ///   - screen: The target screen to configure. If `nil`, applies to the
-    ///     current or main screen.
-    ///   - skipRestart: If `true`, skips restarting WallpaperAgent and auto-rollback
-    ///     checks. Useful for testing or when multiple operations are batched.
-    ///   - enableDebug: When `true`, enables detailed debug logging for
-    ///     troubleshooting configuration issues.
-    /// - Throws: `PaperSaverError.screensaverNotFound` if the specified module
-    ///   doesn't exist, or `PaperSaverError.invalidConfiguration` if the
-    ///   configuration cannot be applied.
-    /// - Note: Changes take effect immediately but may require a moment to
-    ///   be reflected in the system preferences. Auto-rollback protection
-    ///   is active by default to detect and recover from WallpaperAgent corruption.
-    public func setScreensaver(module: String, for screen: NSScreen? = nil, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
-        try await screensaverManager.setScreensaver(module: module, screen: screen, skipRestart: skipRestart, enableDebug: enableDebug)
-    }
-
-    /// Sets the same screensaver across all screens and spaces.
+    ///   - configuration: the opaque token the extension expects in its choice configuration.
+    ///   - otherSlot: what happens to the other slot. The default removes the same extension
+    ///     from it, because macOS 26 and later conflate the two modes when one extension holds
+    ///     both slots.
+    ///   - optionValues: the desktop slot needs a placement and a background colour or the agent
+    ///     rejects the choice; the default supplies both. The screensaver slot defaults to none.
     ///
-    /// This function applies the specified screensaver module to all displays
-    /// and spaces in the system, creating a unified screensaver experience.
-    /// This is the most commonly used function for setting screensavers.
-    ///
-    /// - Parameters:
-    ///   - module: The name of the screensaver module to activate
-    ///     system-wide. Must match an available screensaver from
-    ///     `listAvailableScreensavers()`.
-    ///   - skipRestart: If `true`, skips restarting WallpaperAgent and auto-rollback
-    ///     checks. Useful for testing or when multiple operations are batched.
-    ///   - enableDebug: When `true`, enables detailed debug logging for
-    ///     troubleshooting configuration issues.
-    /// - Throws: `PaperSaverError.screensaverNotFound` if the specified module
-    ///   doesn't exist, or `PaperSaverError.invalidConfiguration` if the
-    ///   configuration cannot be applied.
-    /// - Note: This is equivalent to setting the screensaver in System
-    ///   Preferences for all screens and spaces at once. Auto-rollback protection
-    ///   is active by default to detect and recover from WallpaperAgent corruption.
-    public func setScreensaverEverywhere(module: String, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
-        try await screensaverManager.setScreensaverEverywhere(module: module, skipRestart: skipRestart, enableDebug: enableDebug)
-    }
-
-    // MARK: Advanced Screensaver Operations (macOS 14.0+)
-
-    /// Sets the screensaver for a specific space identified by UUID.
-    ///
-    /// This advanced function allows you to configure different screensavers
-    /// for individual spaces (virtual desktops) in macOS. Each space can have
-    /// its own screensaver configuration.
-    ///
-    /// - Parameters:
-    ///   - module: The name of the screensaver module to activate.
-    ///   - spaceUUID: The UUID of the target space. Use `getActiveSpace()` or
-    ///     space management functions to obtain valid UUIDs.
-    ///   - screen: The target screen within the space. If `nil`, applies to
-    ///     the main screen in that space.
-    ///   - skipRestart: When `true`, skips restarting the WallpaperAgent after
-    ///     configuration. Useful for batch operations or when restart will be
-    ///     handled separately.
-    ///   - enableDebug: When `true`, enables detailed debug logging for
-    ///     troubleshooting configuration issues.
-    /// - Throws: `PaperSaverError.screensaverNotFound` if the module doesn't exist,
-    ///   `PaperSaverError.spaceNotFound` if the UUID is invalid, or
-    ///   `PaperSaverError.invalidConfiguration` for other configuration issues.
-    /// - Note: This function requires macOS 14.0 or later for full space support.
-    @available(macOS 14.0, *)
-    public func setScreensaverForSpace(module: String, spaceUUID: String, screen: NSScreen? = nil, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
-        try await screensaverManager.setScreensaverForSpace(module: module, spaceUUID: spaceUUID, screen: screen, skipRestart: skipRestart, enableDebug: enableDebug)
-    }
-
-    /// Sets the screensaver for a specific space identified by numeric ID.
-    ///
-    /// This function provides an alternative way to target spaces using their
-    /// numeric identifier instead of UUID. Useful when working with space
-    /// numbers from Mission Control or other system tools.
-    ///
-    /// - Parameters:
-    ///   - module: The name of the screensaver module to activate.
-    ///   - spaceID: The numeric ID of the target space.
-    ///   - screen: The target screen within the space. If `nil`, applies to
-    ///     the main screen in that space.
-    ///   - skipRestart: When `true`, skips restarting the WallpaperAgent after
-    ///     configuration. Useful for batch operations or when restart will be
-    ///     handled separately.
-    ///   - enableDebug: When `true`, enables detailed debug logging for
-    ///     troubleshooting configuration issues.
-    /// - Throws: `PaperSaverError.screensaverNotFound` if the module doesn't exist,
-    ///   `PaperSaverError.spaceNotFound` if the space ID is invalid, or
-    ///   `PaperSaverError.invalidConfiguration` for other configuration issues.
-    /// - Note: Space IDs may change when spaces are created or destroyed.
-    @available(macOS 14.0, *)
-    public func setScreensaverForSpaceID(module: String, spaceID: Int, screen: NSScreen? = nil, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
-        try await screensaverManager.setScreensaverForSpaceID(module: module, spaceID: spaceID, screen: screen, skipRestart: skipRestart, enableDebug: enableDebug)
-    }
-
-    /// Sets the screensaver for all spaces on a specific display.
-    ///
-    /// This function configures the screensaver for an entire display,
-    /// affecting all spaces on that display. Useful in multi-monitor
-    /// setups where you want different screensavers per display.
-    ///
-    /// - Parameters:
-    ///   - module: The name of the screensaver module to activate.
-    ///   - displayNumber: The display number (typically 1 for main display,
-    ///     2 for secondary, etc.).
-    /// - Throws: `PaperSaverError.screensaverNotFound` if the module doesn't exist,
-    ///   `PaperSaverError.displayNotFound` if the display number is invalid, or
-    ///   `PaperSaverError.invalidConfiguration` for other configuration issues.
-    /// - Note: Display numbers correspond to the system's display arrangement.
-    @available(macOS 14.0, *)
-    public func setScreensaverForDisplay(module: String, displayNumber: Int, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
-        try await screensaverManager.setScreensaverForDisplay(module: module, displayNumber: displayNumber, skipRestart: skipRestart, enableDebug: enableDebug)
-    }
-
-    /// Sets the screensaver for a specific space on a specific display.
-    ///
-    /// This is the most granular screensaver configuration function, allowing
-    /// you to target a specific space on a specific display. Perfect for
-    /// complex multi-monitor, multi-space setups.
-    ///
-    /// - Parameters:
-    ///   - module: The name of the screensaver module to activate.
-    ///   - displayNumber: The display number (1 for main, 2 for secondary, etc.).
-    ///   - spaceNumber: The space number on that display (1-based indexing).
-    /// - Throws: `PaperSaverError.screensaverNotFound` if the module doesn't exist,
-    ///   `PaperSaverError.displayNotFound` if the display number is invalid,
-    ///   `PaperSaverError.spaceNotFoundOnDisplay` if the space doesn't exist on
-    ///   that display, or `PaperSaverError.invalidConfiguration` for other issues.
-    /// - Warning: Space numbers may change when spaces are added or removed.
-    @available(macOS 14.0, *)
-    public func setScreensaverForDisplaySpace(module: String, displayNumber: Int, spaceNumber: Int, skipRestart: Bool = false, enableDebug: Bool = false) async throws {
-        try await screensaverManager.setScreensaverForDisplaySpace(module: module, displayNumber: displayNumber, spaceNumber: spaceNumber, skipRestart: skipRestart, enableDebug: enableDebug)
-    }
-
-    // MARK: Idle Time Management
-
-    /// Gets the current screensaver idle time setting.
-    ///
-    /// This function retrieves the amount of time the system waits before
-    /// activating the screensaver when there's no user activity.
-    ///
-    /// - Returns: The idle time in seconds. Returns `0` if the screensaver
-    ///   is set to "Never" activate.
-    /// - Note: The returned value corresponds to the "Start after" setting
-    ///   in System Preferences > Desktop & Screen Saver.
-    public func getIdleTime() -> Int {
-        return screensaverManager.getIdleTime()
-    }
-
-    /// Sets the screensaver idle time.
-    ///
-    /// This function configures how long the system waits before activating
-    /// the screensaver when there's no user activity. The change takes effect
-    /// immediately.
-    ///
-    /// - Parameter seconds: The idle time in seconds. Use `0` to set the
-    ///   screensaver to "Never" activate. Common values are 60 (1 minute),
-    ///   300 (5 minutes), 600 (10 minutes), etc.
-    /// - Throws: `PaperSaverError.invalidConfiguration` if the seconds value
-    ///   is negative or otherwise invalid.
-    /// - Note: This is equivalent to changing the "Start after" setting in
-    ///   System Preferences > Desktop & Screen Saver.
-    public func setIdleTime(seconds: Int) throws {
-        try screensaverManager.setIdleTime(seconds: seconds)
-    }
-
-    // MARK: - Wallpaper Management
-
-    // MARK: Core Wallpaper Operations
-
-    /// Gets the current wallpaper information for a specific screen.
-    ///
-    /// This function retrieves details about the wallpaper currently set
-    /// for the specified screen, including the image path and display options.
-    ///
-    /// - Parameter screen: The target screen to query. If `nil`, uses the
-    ///   current screen or main screen.
-    /// - Returns: A `WallpaperInfo` object containing the wallpaper path and
-    ///   configuration, or `nil` if no wallpaper is set or the information
-    ///   cannot be retrieved.
-    /// - Note: The returned path may be a file URL or a reference to a
-    ///   system wallpaper collection.
-    public func getCurrentWallpaper(for screen: NSScreen? = nil) -> WallpaperInfo? {
-        return wallpaperManager.getCurrentWallpaper(for: screen)
-    }
-
-    /// Sets the wallpaper for a specific screen.
-    ///
-    /// - Warning: Wallpaper functionality is not ready for use in the current version.
-    ///
-    /// This function configures a new wallpaper image for the specified screen.
-    /// The operation is asynchronous and may take a moment to complete as the
-    /// system processes and applies the image.
-    ///
-    /// - Parameters:
-    ///   - imageURL: The URL of the image file to use as wallpaper. Must be
-    ///     a valid image format (JPEG, PNG, HEIF, etc.).
-    ///   - screen: The target screen to configure. If `nil`, applies to the
-    ///     current or main screen.
-    ///   - options: Display options for the wallpaper (scaling, positioning, etc.).
-    ///     Defaults to `.default` which uses system preferences.
-    /// - Throws: `PaperSaverError.fileNotFound` if the image doesn't exist,
-    ///   `PaperSaverError.invalidConfiguration` if the image format is unsupported,
-    ///   or other I/O errors during the operation.
-    /// - Note: The image file must be accessible and in a supported format.
-    public func setWallpaper(imageURL: URL, screen: NSScreen? = nil, options: WallpaperOptions = .default) async throws {
-        try await wallpaperManager.setWallpaper(imageURL: imageURL, screen: screen, options: options)
-    }
-
-    /// Sets the same wallpaper across all screens and spaces.
-    ///
-    /// - Warning: Wallpaper functionality is not ready for use in the current version.
-    ///
-    /// This function applies the specified wallpaper image to all displays
-    /// and spaces in the system, creating a unified desktop experience.
-    /// This is the most commonly used function for setting wallpapers.
-    ///
-    /// - Parameters:
-    ///   - imageURL: The URL of the image file to use as wallpaper. Must be
-    ///     a valid image format (JPEG, PNG, HEIF, etc.).
-    ///   - options: Display options for the wallpaper (scaling, positioning, etc.).
-    ///     Defaults to `.default` which uses system preferences.
-    /// - Throws: `PaperSaverError.fileNotFound` if the image doesn't exist,
-    ///   `PaperSaverError.invalidConfiguration` if the image format is unsupported,
-    ///   or other I/O errors during the operation.
-    /// - Note: This is equivalent to setting the wallpaper in System
-    ///   Preferences for all screens and spaces at once.
-    public func setWallpaperEverywhere(imageURL: URL, options: WallpaperOptions = .default) async throws {
-        try await wallpaperManager.setWallpaperEverywhere(imageURL: imageURL, options: options)
-    }
-
-    // MARK: Advanced Wallpaper Operations (macOS 14.0+)
-
-    /// Sets the wallpaper for a specific space identified by UUID.
-    ///
-    /// - Warning: Wallpaper functionality is not ready for use in the current version.
-    ///
-    /// This advanced function allows you to configure different wallpapers
-    /// for individual spaces (virtual desktops) in macOS. Each space can have
-    /// its own unique wallpaper.
-    ///
-    /// - Parameters:
-    ///   - imageURL: The URL of the image file to use as wallpaper.
-    ///   - spaceUUID: The UUID of the target space. Use `getActiveSpace()` or
-    ///     space management functions to obtain valid UUIDs.
-    ///   - screen: The target screen within the space. If `nil`, applies to
-    ///     the main screen in that space.
-    ///   - options: Display options for the wallpaper (scaling, positioning, etc.).
-    /// - Throws: `PaperSaverError.fileNotFound` if the image doesn't exist,
-    ///   `PaperSaverError.spaceNotFound` if the UUID is invalid, or
-    ///   `PaperSaverError.invalidConfiguration` for other configuration issues.
-    /// - Note: This function requires macOS 14.0 or later for full space support.
-    @available(macOS 14.0, *)
-    public func setWallpaperForSpace(imageURL: URL, spaceUUID: String, screen: NSScreen? = nil, options: WallpaperOptions = .default) async throws {
-        try await wallpaperManager.setWallpaperForSpace(imageURL: imageURL, spaceUUID: spaceUUID, screen: screen, options: options)
-    }
-
-    /// Sets the wallpaper for a specific space identified by numeric ID.
-    ///
-    /// - Warning: Wallpaper functionality is not ready for use in the current version.
-    ///
-    /// This function provides an alternative way to target spaces using their
-    /// numeric identifier instead of UUID. Useful when working with space
-    /// numbers from Mission Control or other system tools.
-    ///
-    /// - Parameters:
-    ///   - imageURL: The URL of the image file to use as wallpaper.
-    ///   - spaceID: The numeric ID of the target space.
-    ///   - screen: The target screen within the space. If `nil`, applies to
-    ///     the main screen in that space.
-    ///   - options: Display options for the wallpaper (scaling, positioning, etc.).
-    /// - Throws: `PaperSaverError.fileNotFound` if the image doesn't exist,
-    ///   `PaperSaverError.spaceNotFound` if the space ID is invalid, or
-    ///   `PaperSaverError.invalidConfiguration` for other configuration issues.
-    /// - Note: Space IDs may change when spaces are created or destroyed.
-    @available(macOS 14.0, *)
-    public func setWallpaperForSpaceID(imageURL: URL, spaceID: Int, screen: NSScreen? = nil, options: WallpaperOptions = .default) async throws {
-        try await wallpaperManager.setWallpaperForSpaceID(imageURL: imageURL, spaceID: spaceID, screen: screen, options: options)
-    }
-
-    /// Sets the wallpaper for all spaces on a specific display.
-    ///
-    /// - Warning: Wallpaper functionality is not ready for use in the current version.
-    ///
-    /// This function configures the wallpaper for an entire display,
-    /// affecting all spaces on that display. Useful in multi-monitor
-    /// setups where you want different wallpapers per display.
-    ///
-    /// - Parameters:
-    ///   - imageURL: The URL of the image file to use as wallpaper.
-    ///   - displayNumber: The display number (typically 1 for main display,
-    ///     2 for secondary, etc.).
-    ///   - options: Display options for the wallpaper (scaling, positioning, etc.).
-    /// - Throws: `PaperSaverError.fileNotFound` if the image doesn't exist,
-    ///   `PaperSaverError.displayNotFound` if the display number is invalid, or
-    ///   `PaperSaverError.invalidConfiguration` for other configuration issues.
-    /// - Note: Display numbers correspond to the system's display arrangement.
-    @available(macOS 14.0, *)
-    public func setWallpaperForDisplay(imageURL: URL, displayNumber: Int, options: WallpaperOptions = .default) async throws {
-        try await wallpaperManager.setWallpaperForDisplay(imageURL: imageURL, displayNumber: displayNumber, options: options)
-    }
-
-    /// Sets the wallpaper for a specific space on a specific display.
-    ///
-    /// - Warning: Wallpaper functionality is not ready for use in the current version.
-    ///
-    /// This is the most granular wallpaper configuration function, allowing
-    /// you to target a specific space on a specific display. Perfect for
-    /// complex multi-monitor, multi-space setups with unique wallpapers.
-    ///
-    /// - Parameters:
-    ///   - imageURL: The URL of the image file to use as wallpaper.
-    ///   - displayNumber: The display number (1 for main, 2 for secondary, etc.).
-    ///   - spaceNumber: The space number on that display (1-based indexing).
-    ///   - options: Display options for the wallpaper (scaling, positioning, etc.).
-    /// - Throws: `PaperSaverError.fileNotFound` if the image doesn't exist,
-    ///   `PaperSaverError.displayNotFound` if the display number is invalid,
-    ///   `PaperSaverError.spaceNotFoundOnDisplay` if the space doesn't exist on
-    ///   that display, or `PaperSaverError.invalidConfiguration` for other issues.
-    /// - Warning: Space numbers may change when spaces are added or removed.
-    @available(macOS 14.0, *)
-    public func setWallpaperForDisplaySpace(imageURL: URL, displayNumber: Int, spaceNumber: Int, options: WallpaperOptions = .default) async throws {
-        try await wallpaperManager.setWallpaperForDisplaySpace(imageURL: imageURL, displayNumber: displayNumber, spaceNumber: spaceNumber, options: options)
-    }
-
-    // MARK: Wallpaper & Screensaver Extensions (macOS 14.0+)
-
-    /// Activates a wallpaper/screensaver extension by its bundle identifier.
-    ///
-    /// On macOS Sonoma+ a third-party extension (an `.appex` declaring
-    /// `EXExtensionPointIdentifier com.apple.wallpaper`) can be set as the desktop
-    /// wallpaper, the screensaver (the "idle" wallpaper), or both. This writes the
-    /// extension choice directly into the wallpaper store and restarts WallpaperAgent,
-    /// the same mechanism used to set screensavers.
-    ///
-    /// - Parameters:
-    ///   - bundleID: The extension's bundle identifier, stored as the choice provider
-    ///     (e.g. `"com.example.App.MyWallpaperExtension"`).
-    ///   - configuration: Opaque, extension-defined configuration bytes stored with the
-    ///     choice. Pass whatever the extension expects (often a small token); may be empty.
-    ///   - slot: Which slot(s) to occupy — `.desktop`, `.screensaver`, or `.both`.
-    ///   - optionValues: Optional option-values dictionary applied to the desktop slot
-    ///     (e.g. `["placement": ["picker": ["_0": ["id": "Crop"]]]]`). The screensaver slot
-    ///     is always written with empty option values. Pass `nil` for defaults.
-    ///   - skipRestart: If `true`, skips restarting WallpaperAgent and the post-write
-    ///     verification. Useful for batching multiple changes.
-    /// - Throws: `PaperSaverError.plistReadError` if the wallpaper store can't be read, or
-    ///   `PaperSaverError.invalidConfiguration` if the bundle ID is empty or the change
-    ///   could not be verified after restart.
-    @available(macOS 14.0, *)
+    /// A desktop write also waits for the extension's process after the restart and restarts
+    /// the agent once more if it did not appear (`WriteOptions.extensionLaunchTimeout`,
+    /// `extensionRelaunchAttempts`); the outcome says whether it is running.
+    @discardableResult
     public func setWallpaperExtension(
         bundleID: String,
-        configuration: Data,
-        slot: WallpaperExtensionSlot = .both,
-        optionValues: [String: Any]? = nil,
-        skipRestart: Bool = false
-    ) async throws {
-        try await wallpaperManager.setWallpaperExtension(
-            bundleID: bundleID,
-            configuration: configuration,
-            slot: slot,
-            optionValues: optionValues,
-            skipRestart: skipRestart
-        )
+        configuration token: Data = Data(),
+        slot: WallpaperSlot,
+        otherSlot: OtherSlotPolicy = .clearIfSameProvider,
+        optionValues: OptionValues? = nil,
+        target: StoreTarget = .everywhere,
+        options: WriteOptions? = nil
+    ) async throws -> WriteOutcome {
+        guard !bundleID.isEmpty else {
+            throw PaperSaverError.invalidConfiguration("the extension bundle identifier is empty")
+        }
+        if configuration.validatesWallpaperExtensions {
+            let wallpaper = (try? await wallpaperCatalog.extensions()) ?? []
+            let screensavers = (try? await catalog.extensions()) ?? []
+            if let error = Self.wallpaperExtensionError(bundleID: bundleID, wallpaperExtensions: wallpaper, screensaverExtensions: screensavers) {
+                throw error
+            }
+        }
+        let provider = ChoiceProvider(rawValue: bundleID)
+        let values = optionValues ?? (slot == .desktop ? .image() : .empty)
+        let choice = SlotConfiguration(
+            choice: WallpaperChoice(provider: provider, configuration: token),
+            optionValues: .values(values), shuffle: .null)
+        let strategy = configuration.screensaverOnlyStrategy
+        let systemDefault = configuration.systemDefault
+        let topology = Self.topology(for: target)
+        return try await writer.apply(
+            expectation: "\(bundleID) as \(slot) in \(target)",
+            options: options ?? configuration.writeOptions,
+            expectedExtension: slot == .desktop ? bundleID : nil,
+            edit: { try $0.setting(slot, to: choice, in: target, otherSlot: otherSlot, strategy: strategy,
+                                   systemDefault: systemDefault, topology: topology) },
+            verify: { store in
+                guard store.provider(of: slot, in: target) == provider else { return false }
+                let other = store.provider(of: slot.other, in: target)
+                switch otherSlot {
+                case .keep: return true
+                case .mirror: return other == provider
+                case .clearIfSameProvider, .clearToSystemDefault: return other != provider
+                }
+            })
     }
 
-    /// The bundle identifier of the extension currently set as the desktop wallpaper,
-    /// or `nil` if the desktop wallpaper is not an extension (e.g. a plain image).
-    @available(macOS 14.0, *)
-    public func getCurrentWallpaperExtension(for screen: NSScreen? = nil) -> String? {
-        return wallpaperManager.getCurrentWallpaperExtension(for: screen)
+    /// Replaces the choice in `slot` with the system default, which removes a wallpaper
+    /// extension from that slot.
+    @discardableResult
+    public func clearWallpaperExtension(slot: WallpaperSlot, target: StoreTarget = .everywhere, options: WriteOptions? = nil) async throws -> WriteOutcome {
+        let strategy = configuration.screensaverOnlyStrategy
+        let systemDefault = configuration.systemDefault
+        let expected = try systemDefault(slot).provider
+        let topology = Self.topology(for: target)
+        return try await writer.apply(
+            expectation: "system default as \(slot) in \(target)",
+            options: options ?? configuration.writeOptions,
+            edit: { try $0.clearing(slot, in: target, strategy: strategy, systemDefault: systemDefault, topology: topology) },
+            verify: { $0.provider(of: slot, in: target) == expected })
     }
 
-    /// The bundle identifier of the extension currently set as the screensaver,
-    /// or `nil` if the screensaver is not a wallpaper-style extension.
-    @available(macOS 14.0, *)
-    public func getCurrentScreensaverExtension(for screen: NSScreen? = nil) -> String? {
-        return wallpaperManager.getCurrentScreensaverExtension(for: screen)
+    /// The wallpaper extensions registered with pluginkit (`com.apple.wallpaper` extension point),
+    /// Apple's included.
+    public func listWallpaperExtensions() async throws -> [PluginkitExtension] {
+        try await wallpaperCatalog.extensions()
     }
 
-    // MARK: - Space & Display Management (macOS 14.0+)
-
-    /// Gets information about the currently active space.
+    /// Why `bundleID` cannot be written as a wallpaper extension, or `nil` when it can.
     ///
-    /// This function retrieves details about the space (virtual desktop)
-    /// that is currently visible and active on the system.
-    ///
-    /// - Returns: A `SpaceInfo` object containing the space's name, UUID,
-    ///   and display information, or `nil` if the information cannot be
-    ///   retrieved.
-    /// - Note: The active space is the one currently visible to the user.
-    ///   In multi-monitor setups, this typically refers to the space on
-    ///   the main display that has focus.
-    @available(macOS 14.0, *)
-    public func getActiveSpace() -> SpaceInfo? {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return nil }
-        return spaceManager.getActiveSpace()
+    /// The identifier must belong to a registered wallpaper extension. When it names a
+    /// screensaver extension instead (by bundle identifier or by file name), the error says to
+    /// use `setScreensaver(module:)`.
+    public static func wallpaperExtensionError(
+        bundleID: String,
+        wallpaperExtensions: [PluginkitExtension],
+        screensaverExtensions: [PluginkitExtension]
+    ) -> PaperSaverError? {
+        if wallpaperExtensions.contains(where: { $0.bundleIdentifier == bundleID }) { return nil }
+        if let saver = screensaverExtensions.first(where: { $0.bundleIdentifier == bundleID || $0.displayName == bundleID }) {
+            return .wallpaperExtensionNotFound(
+                bundleID: bundleID,
+                hint: "\(saver.bundleIdentifier) is a screensaver extension (com.apple.screensaver); select it with setScreensaver(module: \"\(saver.displayName)\") or `papersaver set-saver \(saver.displayName)`")
+        }
+        if let byName = wallpaperExtensions.first(where: { $0.displayName == bundleID }) {
+            return .wallpaperExtensionNotFound(bundleID: bundleID, hint: "Did you mean the bundle identifier \(byName.bundleIdentifier)?")
+        }
+        return .wallpaperExtensionNotFound(bundleID: bundleID, hint: nil)
     }
 
-    /// Gets information about a specific space by its numeric ID.
-    ///
-    /// This function retrieves details about a space using its numeric
-    /// identifier, which can be useful when working with space numbers
-    /// from Mission Control or other system tools.
-    ///
-    /// - Parameter spaceID: The numeric ID of the space to query.
-    /// - Returns: A `SpaceInfo` object containing the space's details,
-    ///   or `nil` if the space doesn't exist or information cannot be retrieved.
-    /// - Note: Space IDs may change when spaces are created, destroyed,
-    ///   or reordered through Mission Control.
-    @available(macOS 14.0, *)
-    public func getSpaceByID(_ spaceID: Int) -> SpaceInfo? {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return nil }
-        return spaceManager.getSpaceByID(spaceID)
+    // MARK: - Static images
+
+    /// Sets a static image as the desktop wallpaper through `NSWorkspace`, which applies it at
+    /// once without restarting the agent.
+    @MainActor
+    public func setWallpaper(imageURL: URL, on display: DisplayTarget = .all, placement: WallpaperPlacement = .fill, fillColor: NSColor? = nil) throws {
+        guard FileManager.default.fileExists(atPath: imageURL.path) else {
+            throw PaperSaverError.fileNotFound(imageURL)
+        }
+        var options = placement.workspaceOptions
+        if let fillColor { options[.fillColor] = fillColor }
+        for screen in try Self.screens(for: display) {
+            try NSWorkspace.shared.setDesktopImageURL(imageURL, for: screen, options: options)
+        }
     }
 
-    /// Lists all displays currently connected to the system.
-    ///
-    /// This function provides information about all displays (monitors)
-    /// that are currently connected, including both active displays and
-    /// historical display configurations that the system remembers.
-    ///
-    /// - Returns: An array of `DisplayInfo` objects containing details
-    ///   about each display, including resolution, identifier, and status.
-    ///   Returns an empty array if no display information is available.
-    /// - Note: The list includes both currently connected displays and
-    ///   previously connected displays that macOS remembers for configuration
-    ///   purposes.
-    @available(macOS 14.0, *)
+    /// The static image on a display, as `NSWorkspace` reports it. `nil` when the display is
+    /// not connected or its wallpaper is not an image file.
+    @MainActor
+    public func getCurrentWallpaper(for display: DisplayTarget = .main) -> WallpaperInfo? {
+        guard let screen = try? Self.screens(for: display).first,
+              let url = NSWorkspace.shared.desktopImageURL(for: screen) else { return nil }
+        let options = NSWorkspace.shared.desktopImageOptions(for: screen) ?? [:]
+        return WallpaperInfo(imageURL: url, placement: WallpaperPlacement(workspaceOptions: options),
+                             displayUUID: ScreenIdentifier(from: screen)?.uuid)
+    }
+
+    /// Writes a static image into the store for `target`. Use this only for Spaces that are not
+    /// on screen; `setWallpaper(imageURL:on:placement:fillColor:)` is the supported path.
+    @discardableResult
+    public func setWallpaper(imageURL: URL, target: StoreTarget, optionValues: OptionValues = .image(), options: WriteOptions? = nil) async throws -> WriteOutcome {
+        guard FileManager.default.fileExists(atPath: imageURL.path) else {
+            throw PaperSaverError.fileNotFound(imageURL)
+        }
+        let choice = SlotConfiguration(
+            choice: try WallpaperChoice(provider: .image, configuration: .imageFile(imageURL)),
+            optionValues: .values(optionValues), shuffle: .null)
+        let systemDefault = configuration.systemDefault
+        let topology = Self.topology(for: target)
+        let imagePath = imageURL.path
+        return try await writer.apply(
+            expectation: "image \(imageURL.lastPathComponent) in \(target)",
+            options: options ?? configuration.writeOptions,
+            edit: { try $0.setting(.desktop, to: choice, in: target, otherSlot: .keep, systemDefault: systemDefault, topology: topology) },
+            verify: { store in
+                if case .imageFile(let url)? = store.slot(.desktop, in: target)?.configuration { return url.path == imagePath }
+                return false
+            })
+    }
+
+    @MainActor
+    static func screens(for display: DisplayTarget) throws -> [NSScreen] {
+        switch display {
+        case .all:
+            return NSScreen.screens
+        case .main:
+            guard let main = NSScreen.main else { throw PaperSaverError.displayNotFound("main") }
+            return [main]
+        case .uuid(let uuid):
+            guard let id = DisplayUUID.displayID(for: uuid),
+                  let screen = NSScreen.screens.first(where: { ScreenIdentifier(from: $0)?.displayID == id }) else {
+                throw PaperSaverError.displayNotFound(uuid)
+            }
+            return [screen]
+        case .displayID(let id):
+            guard let screen = NSScreen.screens.first(where: { ScreenIdentifier(from: $0)?.displayID == id }) else {
+                throw PaperSaverError.displayNotFound(String(id))
+            }
+            return [screen]
+        }
+    }
+
+    // MARK: - Idle time
+
+    /// Seconds of inactivity before the screensaver starts; 0 means never.
+    public func getIdleTime() -> Int {
+        IdleTime.seconds()
+    }
+
+    public func setIdleTime(seconds: Int) throws {
+        try IdleTime.set(seconds: seconds)
+    }
+
+    // MARK: - Displays and Spaces
+
+    /// The connected displays and their Spaces.
+    public func displaySpaces() -> [DisplaySpaces] {
+        DisplayTopology.snapshot().displays
+    }
+
+    /// Every display the window server remembers, connected ones first.
+    @MainActor
     public func listDisplays() -> [DisplayInfo] {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return [] }
-        return spaceManager.listDisplays()
-    }
-
-    /// Gets the raw space configuration tree from the system.
-    ///
-    /// This function provides access to the underlying space and display
-    /// configuration data as stored by macOS. Useful for debugging or
-    /// advanced space management scenarios.
-    ///
-    /// - Returns: A dictionary containing the raw space tree data from
-    ///   the system preferences. The structure includes monitors, spaces,
-    ///   and their relationships. Returns an empty dictionary if the
-    ///   information cannot be accessed.
-    /// - Warning: This function returns low-level system data and is
-    ///   primarily intended for debugging purposes. The structure may
-    ///   change between macOS versions.
-    @available(macOS 14.0, *)
-    public func getNativeSpaceTree() -> [String: Any] {
-        guard let spaceManager = screensaverManager as? SpaceManaging else { return [:] }
-        return spaceManager.getNativeSpaceTree()
-    }
-
-    // MARK: - Backup & Restore (macOS 14.0+)
-
-    /// Gets information about the current configuration backup.
-    ///
-    /// This function checks for the existence of a backup file containing
-    /// the previous wallpaper and screensaver configuration, which can be
-    /// used to restore settings if needed.
-    ///
-    /// - Returns: A tuple containing:
-    ///   - `exists`: Whether a backup file exists
-    ///   - `date`: The modification date of the backup file, or `nil` if
-    ///     the file doesn't exist or the date cannot be determined
-    ///   - `size`: The size of the backup file in bytes, or `nil` if
-    ///     the file doesn't exist or the size cannot be determined
-    /// - Note: Backups are automatically created when making configuration
-    ///   changes through PaperSaver's advanced functions.
-    @available(macOS 14.0, *)
-    public func getBackupInfo() -> (exists: Bool, date: Date?, size: Int64?) {
-        let indexPath = SystemPaths.wallpaperIndexPath
-        let backupPath = indexPath + ".backup"
-
-        guard FileManager.default.fileExists(atPath: backupPath) else {
-            return (false, nil, nil)
+        let configs = WindowServerDisplays.displays()
+        var uuids = WindowServerDisplays.knownDisplayUUIDs()
+        for id in DisplayTopology.connectedDisplayIDs() {
+            if let uuid = DisplayUUID.uuid(for: id) { uuids.insert(uuid) }
         }
-
-        do {
-            let attributes = try FileManager.default.attributesOfItem(atPath: backupPath)
-            let date = attributes[.modificationDate] as? Date
-            let size = attributes[.size] as? Int64
-            return (true, date, size)
-        } catch {
-            return (true, nil, nil)
+        let screens = NSScreen.screens
+        var displays: [DisplayInfo] = []
+        for uuid in uuids {
+            let config = configs.first { $0.uuid == uuid }
+            let displayID = DisplayUUID.displayID(for: uuid)
+            let screen = displayID.flatMap { id in screens.first { ScreenIdentifier(from: $0)?.displayID == id } }
+            displays.append(DisplayInfo(
+                uuid: uuid, displayID: displayID, frame: screen?.frame,
+                isMain: screen != nil && screen == NSScreen.main, isConnected: displayID != nil,
+                resolution: config?.resolution, refreshRate: config?.refreshRate, scale: config?.scale,
+                configVersion: config?.configVersion, displayName: screen?.localizedName))
+        }
+        return displays.sorted {
+            if $0.isConnected != $1.isConnected { return $0.isConnected }
+            return $0.uuid < $1.uuid
         }
     }
 
-    /// Restores wallpaper and screensaver configuration from backup.
-    ///
-    /// This function restores the system's wallpaper and screensaver
-    /// configuration from a previously created backup file. This can be
-    /// useful to undo configuration changes or recover from issues.
-    ///
-    /// - Throws: `PaperSaverError.fileNotFound` if no backup file exists,
-    ///   `PaperSaverError.plistReadError` if the backup file is corrupted,
-    ///   or `PaperSaverError.plistWriteError` if the restore operation fails
-    ///   due to permissions or other system issues.
-    /// - Note: This operation immediately takes effect and will change the
-    ///   current wallpaper and screensaver settings to match the backup.
-    /// - Warning: This operation cannot be undone. Consider using
-    ///   `getBackupInfo()` first to verify the backup exists and check its date.
-    @available(macOS 14.0, *)
-    public func restoreFromBackup() throws {
-        let indexPath = SystemPaths.wallpaperIndexPath
-        let backupPath = indexPath + ".backup"
+    /// The Spaces known to the store and to Mission Control.
+    public func listSpaces(includeHistorical: Bool = false) -> [SpaceInfo] {
+        let store = try? file.read()
+        let missionControl = MissionControlSpaces.spaces()
+        let topology = DisplayTopology.snapshot()
+        let current = Set(topology.displays.compactMap(\.currentSpaceUUID))
+        var spaces: [SpaceInfo] = []
 
-        guard FileManager.default.fileExists(atPath: backupPath) else {
-            throw PaperSaverError.fileNotFound(URL(fileURLWithPath: backupPath))
+        for (uuid, entry) in store?.spaces ?? [:] {
+            let mcSpace = missionControl.first { $0.uuid == uuid }
+            let isHistorical = mcSpace?.isHistorical ?? (mcSpace == nil && !uuid.isEmpty && topology.displayUUIDs(ofSpace: uuid).isEmpty)
+            if isHistorical && !includeHistorical { continue }
+            var displayUUIDs = entry.displays.keys.sorted()
+            if displayUUIDs.isEmpty { displayUUIDs = topology.displayUUIDs(ofSpace: uuid) }
+            spaces.append(SpaceInfo(
+                uuid: uuid, displayUUIDs: displayUUIDs, spaceID: mcSpace?.spaceID,
+                displayIdentifier: mcSpace?.displayIdentifier,
+                isCurrent: current.contains(uuid) || (mcSpace?.isCurrent ?? false), isHistorical: isHistorical))
         }
-
-        let plistManager = PlistManager.shared
-        try plistManager.restore(backupAt: backupPath, to: indexPath)
+        for mcSpace in missionControl where !spaces.contains(where: { $0.uuid == mcSpace.uuid }) {
+            if mcSpace.isHistorical && !includeHistorical { continue }
+            spaces.append(SpaceInfo(
+                uuid: mcSpace.uuid, displayUUIDs: topology.displayUUIDs(ofSpace: mcSpace.uuid),
+                spaceID: mcSpace.spaceID, displayIdentifier: mcSpace.displayIdentifier,
+                isCurrent: current.contains(mcSpace.uuid) || mcSpace.isCurrent, isHistorical: mcSpace.isHistorical))
+        }
+        return spaces.sorted { a, b in
+            if (a.displayIdentifier == "Main") != (b.displayIdentifier == "Main") { return a.displayIdentifier == "Main" }
+            if let x = a.spaceID, let y = b.spaceID, x != y { return x < y }
+            return a.uuid < b.uuid
+        }
     }
+
+    /// The Space on screen, preferring the main display's.
+    public func getActiveSpace() -> SpaceInfo? {
+        let spaces = listSpaces()
+        return spaces.first { $0.isCurrent } ?? spaces.first { $0.uuid.isEmpty }
+    }
+
+    public func getSpaceByID(_ spaceID: Int) -> SpaceInfo? {
+        listSpaces(includeHistorical: true).first { $0.spaceID == spaceID }
+    }
+
+    static func topology(for target: StoreTarget) -> DisplayTopologySnapshot? {
+        if case .display = target { return DisplayTopology.snapshot() }
+        return nil
+    }
+
+    // MARK: - Backup
+
+    /// The `.backup` file next to the store, refreshed by every write.
+    public func backupInfo() -> BackupInfo? {
+        file.backupInfo()
+    }
+
+    /// Copies the backup over the store and, by default, restarts the agent so it applies.
+    public func restoreFromBackup(restartAgent: Bool = true) async throws {
+        try file.restoreFromBackupFile()
+        log.info("restored \(file.backupURL.lastPathComponent)")
+        if restartAgent {
+            try await agent.restart()
+        }
+    }
+}
+
+/// Library identity.
+public enum PaperSaverKitInfo {
+    public static let version = "0.4.0"
 }
