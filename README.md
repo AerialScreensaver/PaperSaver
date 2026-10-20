@@ -22,7 +22,8 @@ change).
 ## Requirements
 
 - macOS 14 (Sonoma) or later. Measured on macOS 26 and 27; 14 and 15 untested.
-- Swift 6.0 or later to build (Xcode 16 or later).
+- Swift 6.0 or later (Xcode 16 or later) for the library. CI builds and tests with the latest
+  Xcode only.
 
 ## Installation
 

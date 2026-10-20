@@ -5,19 +5,16 @@ on:
     branches: [master]
     tags: ['*']
   pull_request:
+  workflow_dispatch:
 
 jobs:
   build-and-test:
-    name: Build and test (${{ matrix.runner }})
-    runs-on: ${{ matrix.runner }}
-    strategy:
-      fail-fast: false
-      matrix:
-        # macos-15 ships Xcode 16 (Swift 6.0/6.1), the oldest toolchain the manifest supports.
-        # macos-26 ships Xcode 26.
-        runner: [macos-15, macos-26]
+    name: Build and test
+    # The runner's default Xcode (latest stable).
+    runs-on: macos-26
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
       - name: Toolchain
         run: |
           xcodebuild -version

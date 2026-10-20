@@ -46,7 +46,7 @@ All notable changes to PaperSaver. The format follows [Keep a Changelog](https:/
 - After a desktop extension write, the library waits for the extension's process and restarts the agent once more if it did not launch (measured: about one restart in three on macOS 27.2 fails to connect the extension and the agent does not retry). `WallpaperAgent.runningExtensionBundleIdentifiers()` exposes the check.
 - CLI: `wallpaper-extension clear`, `wallpaper-extension set --strategy`, `get-paper`, `store dump`, `--no-verify`, `--no-rollback`, `set-paper --placement`.
 - Fixture-based unit tests built from stores captured on real Macs; live tests gated behind `PAPERSAVER_INTEGRATION` and `PAPERSAVER_MUTATION`.
-- GitHub Actions workflow building and testing on macOS 15 and macOS 26.
+- GitHub Actions workflow building and testing on macOS 26 with the runner's default Xcode.
 - This changelog.
 
 ## [0.3.1] - 2026-06-29

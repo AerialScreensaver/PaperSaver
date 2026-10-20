@@ -139,7 +139,11 @@ func formatIdleTime(_ seconds: Int) -> String {
 }
 
 /// Runs a store write and turns library errors into exit codes.
-func performWrite(_ description: String, _ body: () async throws -> WriteOutcome) async throws {
+///
+/// `body` is escaping on purpose: Swift 6.1 crashes (ClosureLifetimeFixup, signal 11) and
+/// Swift 6.3 hangs compiling a non-escaping async closure passed here from a command's `run()`.
+/// Callers capture local copies, never `self`.
+func performWrite(_ description: String, _ body: @escaping @Sendable () async throws -> WriteOutcome) async throws {
     do {
         let outcome = try await body()
         print("\(description): \(describe(outcome))")

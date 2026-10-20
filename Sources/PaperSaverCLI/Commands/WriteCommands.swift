@@ -19,8 +19,9 @@ struct SetSaverCommand: AsyncParsableCommand {
     func run() async throws {
         let target = try targeting.resolve()
         let saver = makePaperSaver(verbose: verbose)
+        let name = self.name, options = write.options
         try await performWrite("Screensaver \(name) for \(describe(target))") {
-            try await saver.setScreensaver(module: name, target: target, options: write.options)
+            try await saver.setScreensaver(module: name, target: target, options: options)
         }
     }
 }
@@ -44,8 +45,9 @@ struct SetPaperCommand: AsyncParsableCommand {
         if let spaceUUID {
             var target = StoreTarget.space(uuid: spaceUUID)
             if let uuid = try resolvedDisplayUUID() { target = .spaceOnDisplay(spaceUUID: spaceUUID, displayUUID: uuid) }
-            try await performWrite("Image \(image.lastPathComponent) for \(describe(target))") {
-                try await saver.setWallpaper(imageURL: image, target: target, options: write.options)
+            let image = self.image, options = write.options, storeTarget = target
+            try await performWrite("Image \(image.lastPathComponent) for \(describe(storeTarget))") {
+                try await saver.setWallpaper(imageURL: image, target: storeTarget, options: options)
             }
             return
         }
@@ -192,9 +194,11 @@ struct WallpaperExtensionCommand: AsyncParsableCommand {
             configuration.log = verbose ? .standardError(minimumLevel: .debug) : .standardError(minimumLevel: .warning)
             configuration.screensaverOnlyStrategy = strategy.strategy
             let saver = PaperSaver(configuration: configuration)
-            try await performWrite("\(bundleID) as \(slot.slot.rawValue) for \(describe(target))") {
-                try await saver.setWallpaperExtension(bundleID: bundleID, configuration: Data((config ?? "").utf8),
-                                                      slot: slot.slot, otherSlot: other.policy, target: target, options: write.options)
+            let bundleID = self.bundleID, token = Data((config ?? "").utf8), slot = self.slot.slot
+            let otherSlot = other.policy, options = write.options
+            try await performWrite("\(bundleID) as \(slot.rawValue) for \(describe(target))") {
+                try await saver.setWallpaperExtension(bundleID: bundleID, configuration: token,
+                                                      slot: slot, otherSlot: otherSlot, target: target, options: options)
             }
         }
     }
@@ -209,8 +213,9 @@ struct WallpaperExtensionCommand: AsyncParsableCommand {
         func run() async throws {
             let target = try targeting.resolve()
             let saver = makePaperSaver(verbose: verbose)
-            try await performWrite("System default as \(slot.slot.rawValue) for \(describe(target))") {
-                try await saver.clearWallpaperExtension(slot: slot.slot, target: target, options: write.options)
+            let slot = self.slot.slot, options = write.options
+            try await performWrite("System default as \(slot.rawValue) for \(describe(target))") {
+                try await saver.clearWallpaperExtension(slot: slot, target: target, options: options)
             }
         }
     }
