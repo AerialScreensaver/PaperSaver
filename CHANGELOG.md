@@ -2,7 +2,7 @@
 
 All notable changes to PaperSaver. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
-## [0.4.0] - Unreleased
+## [0.4.0] - 2026-10-20
 
 ### Breaking
 
