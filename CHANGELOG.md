@@ -2,6 +2,17 @@
 
 All notable changes to PaperSaver. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.1]
+
+### Changed
+
+- `setWallpaperExtension(…, otherSlot:)` defaults to `.keep`: setting the screensaver never resets the wallpaper and vice versa. In 0.4.0 the default, `.clearIfSameProvider`, removed the extension from the other slot, so setting Aerial as screensaver while it was the wallpaper reset the wallpaper. The clear policies remain available as explicit opt-ins. The CLI's `--other` defaults to `keep` too.
+
+### Added
+
+- `setWallpaperExtension(bundleID:configuration:slots:target:options:)` puts an extension in several slots with one store write and one agent restart, each slot with its own option values (placement and colour for the desktop, none for the screensaver).
+- `papersaver wallpaper-extension set … --slot both`.
+
 ## [0.4.0] - 2026-10-20
 
 ### Breaking

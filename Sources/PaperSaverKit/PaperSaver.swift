@@ -201,9 +201,9 @@ public final class PaperSaver: Sendable {
     ///
     /// - Parameters:
     ///   - configuration: the opaque token the extension expects in its choice configuration.
-    ///   - otherSlot: what happens to the other slot. The default removes the same extension
-    ///     from it, because macOS 26 and later conflate the two modes when one extension holds
-    ///     both slots.
+    ///   - otherSlot: what happens to the other slot. The default, `.keep`, never touches it:
+    ///     setting the screensaver leaves the wallpaper alone and vice versa. The clear
+    ///     policies are explicit opt-ins.
     ///   - optionValues: the desktop slot needs a placement and a background colour or the agent
     ///     rejects the choice; the default supplies both. The screensaver slot defaults to none.
     ///
@@ -215,26 +215,14 @@ public final class PaperSaver: Sendable {
         bundleID: String,
         configuration token: Data = Data(),
         slot: WallpaperSlot,
-        otherSlot: OtherSlotPolicy = .clearIfSameProvider,
+        otherSlot: OtherSlotPolicy = .keep,
         optionValues: OptionValues? = nil,
         target: StoreTarget = .everywhere,
         options: WriteOptions? = nil
     ) async throws -> WriteOutcome {
-        guard !bundleID.isEmpty else {
-            throw PaperSaverError.invalidConfiguration("the extension bundle identifier is empty")
-        }
-        if configuration.validatesWallpaperExtensions {
-            let wallpaper = (try? await wallpaperCatalog.extensions()) ?? []
-            let screensavers = (try? await catalog.extensions()) ?? []
-            if let error = Self.wallpaperExtensionError(bundleID: bundleID, wallpaperExtensions: wallpaper, screensaverExtensions: screensavers) {
-                throw error
-            }
-        }
+        try await validateWallpaperExtension(bundleID)
         let provider = ChoiceProvider(rawValue: bundleID)
-        let values = optionValues ?? (slot == .desktop ? .image() : .empty)
-        let choice = SlotConfiguration(
-            choice: WallpaperChoice(provider: provider, configuration: token),
-            optionValues: .values(values), shuffle: .null)
+        let choice = Self.extensionChoice(provider: provider, token: token, slot: slot, optionValues: optionValues)
         let strategy = configuration.screensaverOnlyStrategy
         let systemDefault = configuration.systemDefault
         let topology = Self.topology(for: target)
@@ -253,6 +241,67 @@ public final class PaperSaver: Sendable {
                 case .clearIfSameProvider, .clearToSystemDefault: return other != provider
                 }
             })
+    }
+
+    /// Puts a wallpaper extension in several slots with one store write and one agent restart,
+    /// typically `[.desktop, .screensaver]`.
+    ///
+    /// Each slot gets the option values it needs: a placement and a background colour for the
+    /// desktop, none for the screensaver. (`otherSlot: .mirror` would copy the desktop's
+    /// placement into the screensaver slot, which an extension may read as "not a screensaver".)
+    @discardableResult
+    public func setWallpaperExtension(
+        bundleID: String,
+        configuration token: Data = Data(),
+        slots: Set<WallpaperSlot>,
+        target: StoreTarget = .everywhere,
+        options: WriteOptions? = nil
+    ) async throws -> WriteOutcome {
+        guard !slots.isEmpty else {
+            throw PaperSaverError.invalidConfiguration("no slot to write")
+        }
+        try await validateWallpaperExtension(bundleID)
+        let provider = ChoiceProvider(rawValue: bundleID)
+        let ordered = WallpaperSlot.allCases.filter(slots.contains)
+        let choices = ordered.map { ($0, Self.extensionChoice(provider: provider, token: token, slot: $0, optionValues: nil)) }
+        let strategy = configuration.screensaverOnlyStrategy
+        let systemDefault = configuration.systemDefault
+        let topology = Self.topology(for: target)
+        return try await writer.apply(
+            expectation: "\(bundleID) as \(ordered.map(\.rawValue).joined(separator: " + ")) in \(target)",
+            options: options ?? configuration.writeOptions,
+            expectedExtension: slots.contains(.desktop) ? bundleID : nil,
+            edit: { store in
+                var store = store
+                for (slot, choice) in choices {
+                    store = try store.setting(slot, to: choice, in: target, otherSlot: .keep, strategy: strategy,
+                                              systemDefault: systemDefault, topology: topology)
+                }
+                return store
+            },
+            verify: { store in ordered.allSatisfy { store.provider(of: $0, in: target) == provider } })
+    }
+
+    /// Throws when `bundleID` is empty or, with validation on, not a registered wallpaper extension.
+    private func validateWallpaperExtension(_ bundleID: String) async throws {
+        guard !bundleID.isEmpty else {
+            throw PaperSaverError.invalidConfiguration("the extension bundle identifier is empty")
+        }
+        guard configuration.validatesWallpaperExtensions else { return }
+        let wallpaper = (try? await wallpaperCatalog.extensions()) ?? []
+        let screensavers = (try? await catalog.extensions()) ?? []
+        if let error = Self.wallpaperExtensionError(bundleID: bundleID, wallpaperExtensions: wallpaper, screensaverExtensions: screensavers) {
+            throw error
+        }
+    }
+
+    /// The slot value for a wallpaper extension: the desktop defaults to a placement plus a
+    /// background colour (the agent rejects a desktop choice without them), the screensaver to
+    /// no option values.
+    static func extensionChoice(provider: ChoiceProvider, token: Data, slot: WallpaperSlot, optionValues: OptionValues?) -> SlotConfiguration {
+        SlotConfiguration(
+            choice: WallpaperChoice(provider: provider, configuration: token),
+            optionValues: .values(optionValues ?? (slot == .desktop ? .image() : .empty)), shuffle: .null)
     }
 
     /// Replaces the choice in `slot` with the system default, which removes a wallpaper

@@ -2,16 +2,18 @@ import Foundation
 
 /// What happens to the slot that is not being written.
 public enum OtherSlotPolicy: Sendable, Equatable {
-    /// Leave it as it is. A `Linked` choice is materialised into it; if it is still missing
-    /// after a desktop write, the system default fills it (an individual section needs both).
+    /// Leave it as it is: setting the screensaver never touches the wallpaper and vice versa.
+    /// The default. A `Linked` choice is materialised into it; if it is still missing after a
+    /// desktop write, the system default fills it (an individual section needs both).
     case keep
-    /// Replace it with the system default choice.
+    /// Replace it with the system default choice. Opt-in.
     case clearToSystemDefault
     /// Replace it with the system default only when it holds the same provider as the choice
-    /// being written. This keeps a wallpaper extension out of both slots at once.
+    /// being written, keeping an extension out of both slots at once. Opt-in.
     case clearIfSameProvider
-    /// Copy the choice being written into it. Not recommended for wallpaper extensions on
-    /// macOS 26 and later, where the same extension in both slots conflates the two modes.
+    /// Copy the choice being written into it, option values included. To put a wallpaper
+    /// extension in both slots, prefer `PaperSaver.setWallpaperExtension(bundleID:slots:)`,
+    /// which gives each slot its own option values.
     case mirror
 }
 

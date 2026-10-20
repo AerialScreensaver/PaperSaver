@@ -47,9 +47,10 @@ final class FacadeTests: XCTestCase {
         XCTAssertEqual(saver.currentWallpaperChoice(slot: .desktop)?.provider, .image)
     }
 
-    func testSetWallpaperExtensionClearsTheOtherSlotByDefault() async throws {
+    func testClearIfSameProviderIsAnOptIn() async throws {
         let saver = try makeSaver(fixture: "store-extension-both-slots")
-        let outcome = try await saver.setWallpaperExtension(bundleID: aerial, configuration: Data("aerial".utf8), slot: .desktop)
+        let outcome = try await saver.setWallpaperExtension(bundleID: aerial, configuration: Data("aerial".utf8), slot: .desktop,
+                                                            otherSlot: .clearIfSameProvider)
         XCTAssertEqual(outcome, .applied)
         XCTAssertEqual(saver.getCurrentWallpaperExtension(), aerial)
         XCTAssertNil(saver.getCurrentScreensaverExtension())
@@ -57,6 +58,47 @@ final class FacadeTests: XCTestCase {
         XCTAssertEqual(store.allSpacesAndDisplays?.idle?.provider, .neptuneOne)
         XCTAssertEqual(store.allSpacesAndDisplays?.desktop?.optionValues.values?.backgroundColor, .opaqueBlack)
         XCTAssertEqual(store.allSpacesAndDisplays?.desktop?.optionValues.values?.placement, .crop)
+    }
+
+    /// Guillaume's 2026-10-20 report: Aerial as wallpaper, another screensaver; setting Aerial as
+    /// screensaver must not reset the wallpaper, and setting the wallpaper must not reset the
+    /// screensaver.
+    func testSettingOneSlotKeepsTheOtherByDefault() async throws {
+        let saver = try makeSaver(fixture: "store-mixed-allspaces-extension")
+        let desktopBefore = try saver.readStore().allSpacesAndDisplays?.desktop
+        try await saver.setWallpaperExtension(bundleID: aerial, configuration: Data("aerial".utf8), slot: .screensaver)
+        XCTAssertEqual(try saver.readStore().allSpacesAndDisplays?.desktop, desktopBefore, "the wallpaper is untouched")
+        XCTAssertEqual(saver.getCurrentScreensaverExtension(), aerial)
+        XCTAssertEqual(saver.getCurrentWallpaperExtension(), aerial)
+
+        let other = try makeSaver(fixture: "store-idle-only-allspaces")
+        let idleBefore = try other.readStore().allSpacesAndDisplays?.idle
+        try await other.setWallpaperExtension(bundleID: "com.example.Other.WallpaperExtension", slot: .desktop)
+        XCTAssertEqual(try other.readStore().allSpacesAndDisplays?.idle, idleBefore, "the screensaver is untouched")
+        XCTAssertEqual(other.getCurrentWallpaperExtension(), "com.example.Other.WallpaperExtension")
+    }
+
+    func testBothSlotsInOneWrite() async throws {
+        let saver = try makeSaver(fixture: "store-linked-default")
+        let before = try Data(contentsOf: saver.configuration.storeURL)
+        let outcome = try await saver.setWallpaperExtension(bundleID: aerial, configuration: Data("aerial".utf8), slots: [.desktop, .screensaver])
+        XCTAssertEqual(outcome, .applied)
+        let store = try saver.readStore()
+        for section in [store.allSpacesAndDisplays, store.systemDefault].compactMap({ $0 }) {
+            XCTAssertEqual(section.type, .individual)
+            XCTAssertEqual(section.desktop?.provider?.rawValue, aerial)
+            XCTAssertEqual(section.idle?.provider?.rawValue, aerial)
+            XCTAssertEqual(section.desktop?.optionValues.values?.placement, .crop)
+            XCTAssertNotNil(section.desktop?.optionValues.values?.backgroundColor)
+            XCTAssertEqual(section.idle?.optionValues, .values(.empty), "no placement in the screensaver slot")
+            XCTAssertNil(section.linked)
+        }
+        XCTAssertEqual(try Data(contentsOf: saver.configuration.storeURL.appendingPathExtension("backup")), before,
+                       "one write: the backup is the store before the call")
+        do {
+            try await saver.setWallpaperExtension(bundleID: aerial, slots: [])
+            XCTFail("expected invalidConfiguration")
+        } catch PaperSaverError.invalidConfiguration {}
     }
 
     func testScreensaverOnlyFromDefaultMaterializesTheSystemDesktop() async throws {

@@ -75,7 +75,7 @@ to the screensaver, because the agent resets a store that holds only screensaver
 
 A wallpaper extension (an app extension on the `com.apple.wallpaper` extension point, such as
 [Aerial](https://github.com/AerialScreensaver/Aerial) 4.1) is identified by its bundle
-identifier and can serve as the desktop wallpaper, the screensaver, or either one at a time.
+identifier and can serve as the desktop wallpaper, the screensaver, or both.
 Screensaver extensions (`com.apple.screensaver`, like Apple's Flurry) are a different kind:
 select them by name with `setScreensaver(module:)`. `setWallpaperExtension` checks the bundle
 identifier against the pluginkit registry first and throws `wallpaperExtensionNotFound`, with
@@ -85,12 +85,14 @@ agent would otherwise store any string and fail to render it.
 ```swift
 let aerial = "com.glouel.Aerial-App.Aerial4WallpaperExtension"
 
-// Desktop wallpaper. If the same extension was the screensaver, that slot goes back to the
-// system default: on macOS 26 and later one extension in both slots conflates the two modes.
+// Desktop wallpaper. The screensaver is left as it is.
 try await paperSaver.setWallpaperExtension(bundleID: aerial, configuration: Data("aerial".utf8), slot: .desktop)
 
-// Screensaver only, keeping whatever wallpaper the user has.
+// Screensaver. The wallpaper is left as it is.
 try await paperSaver.setWallpaperExtension(bundleID: aerial, slot: .screensaver)
+
+// Both, in one store write and one agent restart.
+try await paperSaver.setWallpaperExtension(bundleID: aerial, configuration: Data("aerial".utf8), slots: [.desktop, .screensaver])
 
 // Remove the extension from a slot.
 try await paperSaver.clearWallpaperExtension(slot: .screensaver)
@@ -99,8 +101,9 @@ paperSaver.getCurrentWallpaperExtension()     // "com.glouel.Aerial-App.Aerial4W
 paperSaver.getCurrentScreensaverExtension()   // nil
 ```
 
-`otherSlot:` chooses what happens to the slot not being written: `.clearIfSameProvider` (the
-default), `.keep`, `.clearToSystemDefault` or `.mirror`. The desktop slot needs a placement and
+Writing one slot never touches the other. `otherSlot:` opts into something else:
+`.clearIfSameProvider` (remove the same extension from the other slot),
+`.clearToSystemDefault` or `.mirror`. The desktop slot needs a placement and
 a background colour or the agent rejects the choice; `setWallpaperExtension` supplies both
 unless you pass `optionValues:`.
 
@@ -151,7 +154,7 @@ swift build -c release --product papersaver
 | `set-paper IMAGE [--display N \| --display-uuid U] [--placement fill\|fit\|stretch\|center]` | Static image through NSWorkspace; `--space-uuid S` writes the store instead. |
 | `wallpaper-extension get [--json]` | The extension in each slot. |
 | `wallpaper-extension list [--json] [--verbose]` | The registered wallpaper extensions (bundle identifiers to pass to `set`). |
-| `wallpaper-extension set BUNDLE_ID --slot desktop\|screensaver [--other keep\|clear\|clear-if-same\|mirror] [--config TOKEN] [--strategy automatic\|idle-section\|materialize-desktop]` | Put an extension in a slot. |
+| `wallpaper-extension set BUNDLE_ID --slot desktop\|screensaver\|both [--other keep\|clear\|clear-if-same\|mirror] [--config TOKEN] [--strategy automatic\|idle-section\|materialize-desktop]` | Put an extension in a slot. |
 | `wallpaper-extension clear --slot desktop\|screensaver` | Put the system default back. |
 | `list-displays [--json]`, `list-spaces [--json]`, `get-space [--json]` | Displays, Spaces and the Space on screen. |
 | `idle-time get\|set SECONDS` | The delay before the screensaver starts. |

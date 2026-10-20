@@ -129,8 +129,16 @@ struct WallpaperExtensionCommand: AsyncParsableCommand {
     }
 
     enum SlotArgument: String, ExpressibleByArgument, CaseIterable {
-        case desktop, screensaver, idle
-        var slot: WallpaperSlot { self == .desktop ? .desktop : .screensaver }
+        case desktop, screensaver, idle, both
+        var slots: Swift.Set<WallpaperSlot> {
+            switch self {
+            case .desktop: return [.desktop]
+            case .screensaver, .idle: return [.screensaver]
+            case .both: return [.desktop, .screensaver]
+            }
+        }
+        /// The single slot, or `nil` for `both`.
+        var slot: WallpaperSlot? { slots.count == 1 ? slots.first : nil }
     }
 
     enum OtherArgument: String, ExpressibleByArgument, CaseIterable {
@@ -180,8 +188,8 @@ struct WallpaperExtensionCommand: AsyncParsableCommand {
             commandName: "set", abstract: "Put a wallpaper extension in a slot.",
             discussion: "The bundle identifier must be one `wallpaper-extension list` prints. For a screensaver extension or a .saver plug-in, use `set-saver NAME`.")
         @Argument(help: "The wallpaper extension's bundle identifier, as `wallpaper-extension list` prints it.") var bundleID: String
-        @Option(name: .long, help: "desktop or screensaver.") var slot: SlotArgument
-        @Option(name: .long, help: "What happens to the other slot: keep, clear, clear-if-same (default) or mirror.") var other: OtherArgument = .clearIfSame
+        @Option(name: .long, help: "desktop, screensaver or both (one write, each slot with its own options).") var slot: SlotArgument
+        @Option(name: .long, help: "What happens to the other slot: keep (default, never touched), clear, clear-if-same or mirror. Ignored with --slot both.") var other: OtherArgument = .keep
         @Option(name: .long, help: "The opaque configuration token the extension expects.") var config: String?
         @Option(name: .long, help: "How a screensaver-only section is written: automatic (default: idle-section when another section has a desktop, else materialize-desktop), idle-section or materialize-desktop.") var strategy: StrategyArgument = .automatic
         @OptionGroup var targeting: TargetingOptions
@@ -194,11 +202,16 @@ struct WallpaperExtensionCommand: AsyncParsableCommand {
             configuration.log = verbose ? .standardError(minimumLevel: .debug) : .standardError(minimumLevel: .warning)
             configuration.screensaverOnlyStrategy = strategy.strategy
             let saver = PaperSaver(configuration: configuration)
-            let bundleID = self.bundleID, token = Data((config ?? "").utf8), slot = self.slot.slot
+            let bundleID = self.bundleID, token = Data((config ?? "").utf8), slots = self.slot.slots
             let otherSlot = other.policy, options = write.options
-            try await performWrite("\(bundleID) as \(slot.rawValue) for \(describe(target))") {
-                try await saver.setWallpaperExtension(bundleID: bundleID, configuration: token,
-                                                      slot: slot, otherSlot: otherSlot, target: target, options: options)
+            let label = WallpaperSlot.allCases.filter(slots.contains).map(\.rawValue).joined(separator: " + ")
+            try await performWrite("\(bundleID) as \(label) for \(describe(target))") {
+                if slots.count == 1, let slot = slots.first {
+                    return try await saver.setWallpaperExtension(bundleID: bundleID, configuration: token,
+                                                                 slot: slot, otherSlot: otherSlot, target: target, options: options)
+                }
+                return try await saver.setWallpaperExtension(bundleID: bundleID, configuration: token,
+                                                             slots: slots, target: target, options: options)
             }
         }
     }
@@ -213,7 +226,10 @@ struct WallpaperExtensionCommand: AsyncParsableCommand {
         func run() async throws {
             let target = try targeting.resolve()
             let saver = makePaperSaver(verbose: verbose)
-            let slot = self.slot.slot, options = write.options
+            guard let slot = self.slot.slot else {
+                throw ValidationError("Clear one slot at a time: --slot desktop or --slot screensaver.")
+            }
+            let options = write.options
             try await performWrite("System default as \(slot.rawValue) for \(describe(target))") {
                 try await saver.clearWallpaperExtension(slot: slot, target: target, options: options)
             }
