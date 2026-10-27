@@ -65,6 +65,23 @@ struct IdleTimeCommand: AsyncParsableCommand {
     }
 }
 
+struct DisplaySleepCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "display-sleep", abstract: "Read the delay before the display turns off (change it in System Settings).",
+        subcommands: [Get.self], defaultSubcommand: Get.self)
+
+    struct Get: AsyncParsableCommand {
+        static let configuration = CommandConfiguration(commandName: "get", abstract: "Read the display sleep delay.")
+        @Flag(name: .shortAndLong, help: "Print JSON.") var json = false
+        func run() async throws {
+            guard let minutes = await PaperSaver().getDisplaySleep() else {
+                throw ValidationError("pmset reported no display sleep setting")
+            }
+            if json { print("{\"displaySleep\": \(minutes)}") } else { print("Display sleep: \(formatIdleTime(minutes * 60))") }
+        }
+    }
+}
+
 struct ListSpacesCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "list-spaces", abstract: "List the connected displays and their Spaces, with the screensaver selected for each.")
 

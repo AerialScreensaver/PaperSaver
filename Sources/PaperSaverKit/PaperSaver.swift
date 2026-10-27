@@ -456,6 +456,14 @@ public final class PaperSaver: Sendable {
         try IdleTime.set(seconds: seconds)
     }
 
+    // MARK: - Display sleep
+
+    /// Minutes before the display turns off on the current power source; 0 means never,
+    /// `nil` means unknown. Read-only: changing it needs root.
+    public func getDisplaySleep() async -> Int? {
+        await DisplaySleep.minutes()
+    }
+
     // MARK: - Displays and Spaces
 
     /// The connected displays and their Spaces.
@@ -556,5 +564,5 @@ public final class PaperSaver: Sendable {
 
 /// Library identity.
 public enum PaperSaverKitInfo {
-    public static let version = "0.4.2"
+    public static let version = "0.4.3"
 }

@@ -2,6 +2,13 @@
 
 All notable changes to PaperSaver. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.3]
+
+### Added
+
+- `getDisplaySleep()` and `DisplaySleep.minutes()` read the display sleep delay for the current power source from `pmset -g` (0 = never, `nil` = unknown). Read-only: changing it needs root.
+- `papersaver display-sleep get [--json]`.
+
 ## [0.4.2]
 
 ### Added

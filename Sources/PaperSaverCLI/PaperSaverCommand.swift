@@ -14,7 +14,7 @@ struct PaperSaverCommand: AsyncParsableCommand {
             """,
         version: PaperSaverKitInfo.version,
         subcommands: [
-            ListCommand.self, GetCommand.self, IdleTimeCommand.self,
+            ListCommand.self, GetCommand.self, IdleTimeCommand.self, DisplaySleepCommand.self,
             ListSpacesCommand.self, ListDisplaysCommand.self, GetSpaceCommand.self,
             SetSaverCommand.self, SetPaperCommand.self, GetPaperCommand.self,
             WallpaperExtensionCommand.self, StoreCommand.self, RepairOptionsCommand.self,

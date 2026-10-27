@@ -162,6 +162,7 @@ swift build -c release --product papersaver
 | `wallpaper-extension clear --slot desktop\|screensaver` | Put the system default back. |
 | `list-displays [--json]`, `list-spaces [--json]`, `get-space [--json]` | Displays, Spaces and the Space on screen. |
 | `idle-time get\|set SECONDS` | The delay before the screensaver starts. |
+| `display-sleep get` | The delay before the display turns off (read-only). |
 | `store dump [--json]` | Every store section with its providers and option keys. |
 | `repair-options [--dry-run] [--no-restart]` | Repair the background colour PaperSaver 0.3.1 and earlier wrote one level too deep. |
 | `restore-backup [--force] [--no-restart]` | Put back the store as it was before the last write. |
