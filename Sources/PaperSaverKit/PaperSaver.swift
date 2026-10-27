@@ -319,6 +319,32 @@ public final class PaperSaver: Sendable {
             verify: { $0.provider(of: slot, in: target) == expected })
     }
 
+    /// Moves the background colour PaperSaver 0.3.1 and earlier wrote one level too deep to
+    /// the path WallpaperAgent reads, in every slot of every section.
+    ///
+    /// With the old shape the agent cannot decode the slot's option values ("Failed to decode
+    /// option values for wallpaper", Cocoa error 4865) and treats the desktop as having no
+    /// placement. Choices are not changed. Returns `nil` without writing or restarting the
+    /// agent when the store has nothing to repair.
+    @discardableResult
+    public func repairLegacyOptionValues(options: WriteOptions? = nil) async throws -> WriteOutcome? {
+        let current = try file.read()
+        let count = current.repairingLegacyOptionValues().repairedSlots
+        guard count > 0 else { return nil }
+        let desktop = current.provider(of: .desktop)
+        let screensaver = current.provider(of: .screensaver)
+        return try await writer.apply(
+            expectation: "\(count) legacy background colour(s) repaired",
+            options: options ?? configuration.writeOptions,
+            expectedExtension: desktop.flatMap { $0.isThirdPartyExtension ? $0.rawValue : nil },
+            edit: { $0.repairingLegacyOptionValues().store },
+            verify: { store in
+                store.repairingLegacyOptionValues().repairedSlots == 0
+                    && store.provider(of: .desktop) == desktop
+                    && store.provider(of: .screensaver) == screensaver
+            })
+    }
+
     /// The wallpaper extensions registered with pluginkit (`com.apple.wallpaper` extension point),
     /// Apple's included.
     public func listWallpaperExtensions() async throws -> [PluginkitExtension] {
@@ -530,5 +556,5 @@ public final class PaperSaver: Sendable {
 
 /// Library identity.
 public enum PaperSaverKitInfo {
-    public static let version = "0.4.0"
+    public static let version = "0.4.2"
 }

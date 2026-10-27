@@ -101,6 +101,33 @@ final class FacadeTests: XCTestCase {
         } catch PaperSaverError.invalidConfiguration {}
     }
 
+    func testRepairLegacyOptionValues() async throws {
+        let saver = try makeSaver(fixture: "store-mixed-allspaces-extension")
+        let before = try saver.readStore()
+        let outcome = try await saver.repairLegacyOptionValues()
+        XCTAssertEqual(outcome, .applied)
+        let after = try saver.readStore()
+        XCTAssertEqual(after.allSpacesAndDisplays?.desktop?.optionValues.values, .image())
+        XCTAssertEqual(after.provider(of: .desktop), before.provider(of: .desktop))
+        XCTAssertEqual(after.provider(of: .screensaver), before.provider(of: .screensaver))
+        XCTAssertEqual(after.systemDefault, before.systemDefault)
+
+        let backup = try Data(contentsOf: saver.configuration.storeURL.appendingPathExtension("backup"))
+        let second = try await saver.repairLegacyOptionValues()
+        XCTAssertNil(second, "nothing left to repair")
+        XCTAssertEqual(try Data(contentsOf: saver.configuration.storeURL.appendingPathExtension("backup")), backup,
+                       "no second write")
+    }
+
+    func testRepairLegacyOptionValuesDoesNotWriteACorrectStore() async throws {
+        let saver = try makeSaver(fixture: "store-agent-perspace-image")
+        let before = try Data(contentsOf: saver.configuration.storeURL)
+        let outcome = try await saver.repairLegacyOptionValues()
+        XCTAssertNil(outcome)
+        XCTAssertEqual(try Data(contentsOf: saver.configuration.storeURL), before)
+        XCTAssertNil(saver.backupInfo(), "no write, so no backup")
+    }
+
     func testScreensaverOnlyFromDefaultMaterializesTheSystemDesktop() async throws {
         let saver = try makeSaver(fixture: "store-linked-default")
         try await saver.setWallpaperExtension(bundleID: aerial, slot: .screensaver)

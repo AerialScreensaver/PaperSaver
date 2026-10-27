@@ -218,3 +218,40 @@ final class StoreEditorTests: XCTestCase {
         XCTAssertEqual(store.screensaverName(in: .space(uuid: "")), Fixtures.aerialBundleID, "AllSpacesAndDisplays wins")
     }
 }
+
+extension StoreEditorTests {
+    func testRepairingLegacyOptionValuesOnThe031Fixture() throws {
+        let store = try Fixtures.store("store-mixed-allspaces-extension")
+        let (repaired, count) = store.repairingLegacyOptionValues()
+        XCTAssertGreaterThan(count, 0)
+
+        let all = try XCTUnwrap(repaired.allSpacesAndDisplays)
+        XCTAssertEqual(all.desktop?.optionValues.values, .image(), "placement kept, colour moved to the system path")
+        XCTAssertEqual(all.desktop?.choices, store.allSpacesAndDisplays?.desktop?.choices, "the choice is untouched")
+        XCTAssertEqual(all.idle, store.allSpacesAndDisplays?.idle)
+        XCTAssertEqual(repaired.systemDefault, store.systemDefault, "System Settings' own slots are already correct")
+
+        XCTAssertEqual(repaired.repairingLegacyOptionValues().repairedSlots, 0)
+        let roundTripped = try StoreCodec.decode(StoreCodec.encode(repaired))
+        XCTAssertEqual(roundTripped.repairingLegacyOptionValues().repairedSlots, 0, "the repair survives encoding")
+    }
+
+    func testRepairingLegacyOptionValuesCoversEverySection() throws {
+        let store = try Fixtures.store("store-extension-both-slots")
+        let (repaired, count) = store.repairingLegacyOptionValues()
+        XCTAssertEqual(count, 2, "0.3.1 wrote the desktop of AllSpacesAndDisplays and SystemDefault")
+        XCTAssertEqual(repaired.allSpacesAndDisplays?.desktop?.optionValues.values, .image())
+        XCTAssertEqual(repaired.systemDefault?.desktop?.optionValues.values, .image())
+        XCTAssertEqual(repaired.allSpacesAndDisplays?.idle, store.allSpacesAndDisplays?.idle)
+    }
+
+    func testRepairingLegacyOptionValuesIsANoOpOnCorrectStores() throws {
+        let legacy: Set = ["store-mixed-allspaces-extension", "store-extension-both-slots"]
+        for name in Fixtures.storeNames where !legacy.contains(name) {
+            let store = try Fixtures.store(name)
+            let (repaired, count) = store.repairingLegacyOptionValues()
+            XCTAssertEqual(count, 0, name)
+            XCTAssertEqual(repaired, store, name)
+        }
+    }
+}

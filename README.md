@@ -137,6 +137,10 @@ not on screen.
   `MissionControlSpaces` and `WindowServerDisplays` expose the system data the facade uses.
 - `backupInfo()` and `restoreFromBackup()` use the `Index.plist.backup` file written before
   every change.
+- `repairLegacyOptionValues()` fixes stores written by PaperSaver 0.3.1 and earlier, whose
+  desktop background colour WallpaperAgent cannot decode ("Failed to decode option values for
+  wallpaper"). It returns `nil` without writing when there is nothing to repair, so an app
+  can call it once at launch.
 
 ## Command line
 
@@ -159,6 +163,7 @@ swift build -c release --product papersaver
 | `list-displays [--json]`, `list-spaces [--json]`, `get-space [--json]` | Displays, Spaces and the Space on screen. |
 | `idle-time get\|set SECONDS` | The delay before the screensaver starts. |
 | `store dump [--json]` | Every store section with its providers and option keys. |
+| `repair-options [--dry-run] [--no-restart]` | Repair the background colour PaperSaver 0.3.1 and earlier wrote one level too deep. |
 | `restore-backup [--force] [--no-restart]` | Put back the store as it was before the last write. |
 
 Targeting flags: `--display N` or `--display-uuid U`, `--space N` or `--space-uuid S`, as

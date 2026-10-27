@@ -109,6 +109,27 @@ public struct OptionValues: Sendable, Equatable {
         }
     }
 
+    // MARK: Legacy repair
+
+    /// These values with the background colour PaperSaver 0.3.1 and earlier wrote one level
+    /// too deep (`values.color.color.color._0.color`) moved to the path the agent reads, or
+    /// `nil` when there is nothing to repair.
+    ///
+    /// The decoder keeps that shape verbatim in `other["color"]`; WallpaperAgent fails to
+    /// decode the whole slot's option values because of it ("Key '_0' not found", Cocoa error
+    /// 4865) and treats the slot as having none.
+    public func repairingLegacyBackgroundColor() -> OptionValues? {
+        guard backgroundColor == nil,
+              let legacy = other["color"]?.anyValue as? [String: Any],
+              let color = Self.backgroundColor(legacy["color"] as? [String: Any]) else {
+            return nil
+        }
+        var repaired = self
+        repaired.backgroundColor = color
+        repaired.other["color"] = nil
+        return repaired
+    }
+
     private static func pickerID(_ dict: [String: Any]?) -> String? {
         (((dict?["picker"] as? [String: Any])?["_0"] as? [String: Any])?["id"]) as? String
     }

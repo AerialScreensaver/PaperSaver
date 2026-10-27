@@ -2,6 +2,18 @@
 
 All notable changes to PaperSaver. The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/).
 
+## [0.4.2]
+
+### Added
+
+- `repairLegacyOptionValues(options:)` repairs stores written by PaperSaver 0.3.1 and earlier, which put the desktop background colour one level too deep (`values.color.color.color._0.color`). WallpaperAgent fails to decode those option values ("Failed to decode option values for wallpaper", Cocoa error 4865) and treats the desktop as having no placement. The repair moves the colour to `values.color.color._0.color` in every slot of every section, without changing any choice, then restarts and verifies the agent. It returns `nil` without writing when there is nothing to repair, so it is safe to call at every launch.
+- `OptionValues.repairingLegacyBackgroundColor()` and `WallpaperStore.repairingLegacyOptionValues()`, the pure transforms behind it.
+- `papersaver repair-options [--dry-run]`.
+
+### Fixed
+
+- `PaperSaverKitInfo.version` (and `papersaver --version`) reported 0.4.0 in 0.4.1.
+
 ## [0.4.1]
 
 ### Changed

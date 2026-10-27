@@ -75,3 +75,34 @@ final class OptionValuesTests: XCTestCase {
         XCTAssertThrowsError(try OptionValues(decoding: Data("aerial".utf8)))
     }
 }
+
+extension OptionValuesTests {
+    /// The 0.3.1 payload: one `color` level too many above `_0`.
+    private func legacyValues() throws -> OptionValues {
+        let colorSpace = try PropertyListSerialization.data(fromPropertyList: "kCGColorSpaceGenericRGB", format: .binary, options: 0)
+        return OptionValues(values: [
+            "placement": ["picker": ["_0": ["id": "Crop"]]],
+            "color": ["color": ["color": ["_0": ["color": ["components": [0.0, 0.0, 0.0, 1.0], "colorSpace": colorSpace]]]]]
+        ])
+    }
+
+    func testRepairingLegacyBackgroundColorMovesItToTheSystemPath() throws {
+        let legacy = try legacyValues()
+        XCTAssertNil(legacy.backgroundColor, "the decoder does not read the 0.3.1 shape as a colour")
+        XCTAssertNotNil(legacy.other["color"])
+
+        let repaired = try XCTUnwrap(legacy.repairingLegacyBackgroundColor())
+        XCTAssertEqual(repaired.backgroundColor, .opaqueBlack)
+        XCTAssertEqual(repaired.placement, .crop)
+        XCTAssertTrue(repaired.other.isEmpty)
+        XCTAssertEqual(repaired, .image(), "a repaired 0.3.1 desktop matches what 0.4 writes")
+        XCTAssertNil(repaired.repairingLegacyBackgroundColor(), "repairing twice is a no-op")
+    }
+
+    func testRepairingLeavesOtherShapesAlone() {
+        XCTAssertNil(OptionValues.image().repairingLegacyBackgroundColor(), "the system shape needs no repair")
+        XCTAssertNil(OptionValues.empty.repairingLegacyBackgroundColor())
+        let junk = OptionValues(values: ["color": ["color": ["something": "else"]]])
+        XCTAssertNil(junk.repairingLegacyBackgroundColor(), "an unknown colour shape is kept, not guessed at")
+    }
+}

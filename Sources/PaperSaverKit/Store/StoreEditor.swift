@@ -179,6 +179,42 @@ extension WallpaperStore {
         return section
     }
 
+    // MARK: Legacy repair
+
+    /// Returns a copy of the store with every slot's 0.3.1 mis-nested background colour moved
+    /// to the path the agent reads (`OptionValues.repairingLegacyBackgroundColor()`), and the
+    /// number of slots that changed. Every section and every provider is covered: only
+    /// PaperSaver ever wrote that shape, so it is never a value to preserve.
+    public func repairingLegacyOptionValues() -> (store: WallpaperStore, repairedSlots: Int) {
+        var store = self
+        var repaired = 0
+        func repair(_ section: StoreSection?) -> StoreSection? {
+            guard var section else { return nil }
+            for keyPath in [\StoreSection.desktop, \StoreSection.idle, \StoreSection.linked] {
+                if let fixed = section[keyPath: keyPath]?.optionValues.values?.repairingLegacyBackgroundColor() {
+                    section[keyPath: keyPath]?.optionValues = .values(fixed)
+                    repaired += 1
+                }
+            }
+            return section
+        }
+
+        store.allSpacesAndDisplays = repair(store.allSpacesAndDisplays)
+        store.systemDefault = repair(store.systemDefault)
+        for (uuid, entry) in store.spaces {
+            var entry = entry
+            entry.default = repair(entry.default)
+            for (displayUUID, section) in entry.displays {
+                entry.displays[displayUUID] = repair(section)
+            }
+            store.spaces[uuid] = entry
+        }
+        for (uuid, section) in store.displays {
+            store.displays[uuid] = repair(section)
+        }
+        return (store, repaired)
+    }
+
     /// `true` when any section holds a desktop choice, or a `Linked` choice that is not the
     /// agent's placeholder.
     public var hasAnyDesktopChoice: Bool {

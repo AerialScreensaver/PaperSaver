@@ -17,7 +17,8 @@ struct PaperSaverCommand: AsyncParsableCommand {
             ListCommand.self, GetCommand.self, IdleTimeCommand.self,
             ListSpacesCommand.self, ListDisplaysCommand.self, GetSpaceCommand.self,
             SetSaverCommand.self, SetPaperCommand.self, GetPaperCommand.self,
-            WallpaperExtensionCommand.self, StoreCommand.self, RestoreBackupCommand.self,
+            WallpaperExtensionCommand.self, StoreCommand.self, RepairOptionsCommand.self,
+            RestoreBackupCommand.self,
         ])
 }
 

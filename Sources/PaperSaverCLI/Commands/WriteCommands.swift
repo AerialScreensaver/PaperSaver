@@ -260,6 +260,27 @@ struct StoreCommand: AsyncParsableCommand {
     }
 }
 
+struct RepairOptionsCommand: AsyncParsableCommand {
+    static let configuration = CommandConfiguration(
+        commandName: "repair-options",
+        abstract: "Repair the background colour PaperSaver 0.3.1 and earlier wrote one level too deep.",
+        discussion: "WallpaperAgent cannot decode those option values (\"Failed to decode option values for wallpaper\"). Choices are not changed; nothing is written when the store is already correct.")
+    @Flag(name: .customLong("dry-run"), help: "Only report how many slots need repairing.") var dryRun = false
+    @OptionGroup var write: WriteFlags
+    @Flag(name: .shortAndLong, help: "Print what the library does, to standard error.") var verbose = false
+
+    func run() async throws {
+        let saver = makePaperSaver(verbose: verbose)
+        let count = try saver.readStore().repairingLegacyOptionValues().repairedSlots
+        guard count > 0 else { return print("Nothing to repair.") }
+        guard !dryRun else { return print("\(count) slot(s) to repair.") }
+        let options = write.options
+        try await performWrite("Repaired \(count) slot(s)") {
+            try await saver.repairLegacyOptionValues(options: options) ?? .applied
+        }
+    }
+}
+
 struct RestoreBackupCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(commandName: "restore-backup", abstract: "Put back the store as it was before the last write.")
 
